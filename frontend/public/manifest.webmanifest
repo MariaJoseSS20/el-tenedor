@@ -1,0 +1,19 @@
+{
+  "name": "El Tenedor POS",
+  "short_name": "El Tenedor",
+  "description": "POS El Tenedor General del Canto — restaurante para llevar",
+  "lang": "es-CL",
+  "dir": "ltr",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f4",
+  "theme_color": "#1a1a4b",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

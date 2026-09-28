@@ -1,0 +1,24 @@
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+*.sqlite3
+db.sqlite3
+
+# Entornos y dependencias locales
+.venv/
+venv/
+vendor/
+.env
+frontend/.env
+frontend/.env.production
+*.egg-info/
+dist/
+build/
+node_modules/
+frontend/dist/
+staticfiles/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
