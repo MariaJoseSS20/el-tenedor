@@ -127,6 +127,7 @@ class Venta(models.Model):
         EFECTIVO = "efectivo", "Efectivo"
         TARJETA = "tarjeta", "Tarjeta"
         TRANSFERENCIA = "transferencia", "Transferencia"
+        WEBPAY = "webpay", "Webpay"
 
     class TipoEntrega(models.TextChoices):
         RETIRO = "retiro", "Retiro"
@@ -232,6 +233,11 @@ class CajaDiaria(models.Model):
         decimal_places=2,
         default=Decimal("0.00"),
     )
+    total_webpay = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+    )
     usuario_cierre = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -247,9 +253,89 @@ class CajaDiaria(models.Model):
     def __str__(self):
         return (
             f"Caja {self.fecha} — E:{self.total_efectivo} "
-            f"T:{self.total_tarjetas} Tr:{self.total_transferencias}"
+            f"T:{self.total_tarjetas} Tr:{self.total_transferencias} "
+            f"W:{self.total_webpay}"
         )
 
     @property
     def total_general(self):
-        return self.total_efectivo + self.total_tarjetas + self.total_transferencias
+        return (
+            self.total_efectivo
+            + self.total_tarjetas
+            + self.total_transferencias
+            + self.total_webpay
+        )
+
+
+class Pedido(models.Model):
+    """
+    Pedido web del cliente. Solo llega a cocina si Webpay autoriza el pago.
+    """
+
+    class Estado(models.TextChoices):
+        ESPERANDO_PAGO = "esperando_pago", "Esperando pago"
+        PAGADO = "pagado", "Pagado"
+        RECIBIDO = "recibido", "Recibido"
+        RECHAZADO = "rechazado", "Rechazado"
+
+    nombre_cliente = models.CharField(max_length=120)
+    telefono = models.CharField(max_length=30)
+    tipo_entrega = models.CharField(max_length=20, choices=Venta.TipoEntrega.choices)
+    direccion = models.CharField(max_length=255, blank=True, default="")
+    notas = models.TextField(blank=True, default="")
+    cobro_delivery = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+    )
+    total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    estado = models.CharField(
+        max_length=20,
+        choices=Estado.choices,
+        default=Estado.ESPERANDO_PAGO,
+    )
+    buy_order = models.CharField(max_length=26, unique=True)
+    webpay_token = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    authorization_code = models.CharField(max_length=64, blank=True, default="")
+    venta = models.OneToOneField(
+        Venta,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pedido_web",
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-creado_en"]
+        verbose_name = "pedido web"
+        verbose_name_plural = "pedidos web"
+
+    def __str__(self):
+        return f"Pedido #{self.pk} — {self.nombre_cliente} ({self.get_estado_display()})"
+
+
+class DetallePedido(models.Model):
+    """Línea de producto dentro de un pedido web."""
+
+    pedido = models.ForeignKey(
+        Pedido,
+        on_delete=models.CASCADE,
+        related_name="detalles",
+    )
+    producto = models.ForeignKey(
+        Producto,
+        on_delete=models.PROTECT,
+        related_name="detalles_pedido",
+    )
+    cantidad = models.PositiveIntegerField()
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+    notas = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "detalle de pedido"
+        verbose_name_plural = "detalles de pedido"
+
+    def __str__(self):
+        return f"{self.cantidad} x {self.producto.nombre}"

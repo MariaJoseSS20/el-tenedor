@@ -41,6 +41,21 @@ export async function listPendingSales() {
   });
 }
 
+/**
+ * Ventas pendientes sincronizables del cajero actual.
+ * Excluye las marcadas con sync_error y las de otro cajero (o sin cajero_id).
+ */
+export async function listSyncableSales(cajeroId) {
+  const all = await listPendingSales();
+  if (cajeroId == null) return [];
+  return all.filter(
+    (s) =>
+      !s.sync_error &&
+      s.cajero_id != null &&
+      Number(s.cajero_id) === Number(cajeroId)
+  );
+}
+
 export async function removePendingSales(uuids) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -52,7 +67,35 @@ export async function removePendingSales(uuids) {
   });
 }
 
-export async function countPendingSales() {
-  const all = await listPendingSales();
-  return all.length;
+export async function markSalesRejected(rechazadas) {
+  if (!rechazadas?.length) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    let pending = rechazadas.length;
+    for (const item of rechazadas) {
+      const uuid = item.client_uuid;
+      const motivo = item.motivo || item.detail || "Rechazada por el servidor";
+      const req = store.get(uuid);
+      req.onsuccess = () => {
+        const sale = req.result;
+        if (sale) {
+          sale.sync_error = motivo;
+          store.put(sale);
+        }
+        pending -= 1;
+        if (pending === 0) {
+          /* wait for tx */
+        }
+      };
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function countPendingSales(cajeroId) {
+  const syncable = await listSyncableSales(cajeroId);
+  return syncable.length;
 }

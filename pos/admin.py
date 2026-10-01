@@ -1,7 +1,16 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import CajaDiaria, CustomUser, DetalleVenta, Inventario, Producto, Venta
+from .models import (
+    CajaDiaria,
+    CustomUser,
+    DetallePedido,
+    DetalleVenta,
+    Inventario,
+    Pedido,
+    Producto,
+    Venta,
+)
 
 
 @admin.register(CustomUser)
@@ -18,6 +27,12 @@ class CustomUserAdmin(UserAdmin):
 
 class DetalleVentaInline(admin.TabularInline):
     model = DetalleVenta
+    extra = 0
+    readonly_fields = ("subtotal",)
+
+
+class DetallePedidoInline(admin.TabularInline):
+    model = DetallePedido
     extra = 0
     readonly_fields = ("subtotal",)
 
@@ -53,6 +68,38 @@ class VentaAdmin(admin.ModelAdmin):
     inlines = [DetalleVentaInline]
     readonly_fields = ("total", "creado_en")
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        form.instance.recalcular_total()
+
+
+@admin.register(Pedido)
+class PedidoAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "nombre_cliente",
+        "telefono",
+        "tipo_entrega",
+        "total",
+        "estado",
+        "creado_en",
+    )
+    list_filter = ("estado", "tipo_entrega")
+    search_fields = ("nombre_cliente", "telefono", "buy_order", "webpay_token")
+    inlines = [DetallePedidoInline]
+    readonly_fields = (
+        "total",
+        "buy_order",
+        "webpay_token",
+        "authorization_code",
+        "venta",
+        "creado_en",
+        "actualizado_en",
+    )
+
 
 @admin.register(CajaDiaria)
 class CajaDiariaAdmin(admin.ModelAdmin):
@@ -61,6 +108,7 @@ class CajaDiariaAdmin(admin.ModelAdmin):
         "total_efectivo",
         "total_tarjetas",
         "total_transferencias",
+        "total_webpay",
         "usuario_cierre",
         "cerrado_en",
     )
@@ -68,5 +116,6 @@ class CajaDiariaAdmin(admin.ModelAdmin):
         "total_efectivo",
         "total_tarjetas",
         "total_transferencias",
+        "total_webpay",
         "cerrado_en",
     )

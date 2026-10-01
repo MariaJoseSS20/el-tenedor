@@ -58,14 +58,28 @@ const state = {
   ventaDetalle: null,
   /** Tras cobrar: muestra acciones de ticket/comanda */
   postCobro: null,
+  /** Pedidos web pagados pendientes de recepción */
+  pedidos: [],
+  pedidosKnownIds: new Set(),
+  pedidosPollTimer: null,
   inventario: [],
   cajaPreview: null,
-  reporteFecha: new Date().toISOString().slice(0, 10),
+  reporteFecha: fechaLocalHoy(),
   reporte: null,
   /** Confirmación salsa extra: { salsa } */
   confirmSalsa: null,
   toast: null,
 };
+
+/** Fecha YYYY-MM-DD en zona del local (Punta Arenas). */
+function fechaLocalHoy() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Punta_Arenas",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
 
 const CATEGORIAS = [
   ["todas", "Todas"],
@@ -133,7 +147,7 @@ function idPaltaExtra() {
 const PRECIO_PALTA_EXTRA = 1000;
 
 async function refreshPending() {
-  state.pending = await countPendingSales();
+  state.pending = await countPendingSales(state.user?.id);
 }
 
 async function trySync(showToast = true) {
@@ -143,8 +157,19 @@ async function trySync(showToast = true) {
     await refreshPending();
     if (showToast && result && !result.skipped) {
       const n = result.creadas?.length || 0;
+      const rechazadas = result.rechazadas || [];
       if (n || result.omitidas_idempotentes?.length) {
         toast(result.mensaje || `Sincronizadas ${n} venta(s).`);
+      }
+      if (rechazadas.length) {
+        const motivo =
+          rechazadas[0].motivo || rechazadas[0].detail || "rechazada";
+        toast(
+          rechazadas.length === 1
+            ? `Venta pendiente rechazada: ${motivo}`
+            : `${rechazadas.length} ventas pendientes rechazadas (no se reintentan)`,
+          true
+        );
       }
     }
     render();
@@ -167,6 +192,7 @@ async function bootstrap() {
       await loadProductos();
       await refreshPending();
       await trySync(false);
+      startPedidosPolling();
     } catch {
       clearSession();
       state.user = null;
@@ -208,6 +234,7 @@ function renderLogin() {
       await loadProductos();
       await refreshPending();
       await trySync(false);
+      startPedidosPolling();
       state.view = "pos";
       render();
     } catch (ex) {
@@ -235,6 +262,13 @@ function shell(content) {
       </header>
       <nav class="nav">
         <button data-view="pos" class="${state.view === "pos" ? "active" : ""}">Ventas</button>
+        <button data-view="pedidos" class="${state.view === "pedidos" ? "active" : ""}">
+          Pedidos${
+            state.pedidos.length
+              ? `<span class="nav-badge">${state.pedidos.length}</span>`
+              : ""
+          }
+        </button>
         <button data-view="ventas" class="${state.view === "ventas" ? "active" : ""}">Historial</button>
         ${
           isAdmin
@@ -495,6 +529,11 @@ function resetShawarmaConfigDefaults(cfg) {
   cfg.cantidad = 1;
 }
 
+function hideConfirmSalsa() {
+  state.confirmSalsa = null;
+  document.getElementById("confirm-salsa-overlay")?.remove();
+}
+
 function cerrarShawarmaModal() {
   hideConfirmSalsa();
   state.shawarmaConfig = null;
@@ -741,10 +780,11 @@ function renderAddModal() {
 }
 
 function renderPos() {
+  const activos = state.productos.filter((p) => p.estado === "activo");
   const filtered =
     state.categoria === "todas"
-      ? state.productos
-      : state.productos.filter((p) => p.categoria === state.categoria);
+      ? activos
+      : activos.filter((p) => p.categoria === state.categoria);
 
   return `
     <div class="pos-layout">
@@ -932,6 +972,131 @@ function renderVentas() {
   `;
 }
 
+function renderPedidos() {
+  const cards = state.pedidos
+    .map((p) => {
+      const items = (p.detalles || [])
+        .map(
+          (d) =>
+            `<li><strong>${d.cantidad}×</strong> ${escapeHtml(
+              d.producto_nombre || String(d.producto)
+            )}${d.notas ? ` <em>(${escapeHtml(d.notas)})</em>` : ""}</li>`
+        )
+        .join("");
+      return `
+      <article class="pedido-card">
+        <h3>Pedido #${p.id} · ${money(p.total)}</h3>
+        <p><strong>${escapeHtml(p.nombre_cliente)}</strong> · ${escapeHtml(p.telefono)}</p>
+        <p class="sub">
+          ${escapeHtml(p.tipo_entrega)}${
+            p.direccion ? ` · ${escapeHtml(p.direccion)}` : ""
+          } · Pagado Webpay
+        </p>
+        ${p.notas ? `<p class="sub">Nota: ${escapeHtml(p.notas)}</p>` : ""}
+        <ul class="pedido-items">${items || "<li>Sin ítems</li>"}</ul>
+        <div class="pedido-actions">
+          <button type="button" class="btn btn-mint" data-comanda-pedido="${p.id}" style="width:auto">Comanda</button>
+          <button type="button" class="btn btn-primary" data-recibir-pedido="${p.id}" style="width:auto">Recibido</button>
+        </div>
+      </article>`;
+    })
+    .join("");
+
+  return `
+    <section class="panel">
+      <h2>Pedidos web</h2>
+      <p class="sub">Solo pedidos ya pagados con Webpay. Imprime la comanda y márcalo recibido.</p>
+      <div class="row-actions">
+        <button class="btn btn-mint" id="btn-reload-pedidos" type="button">Actualizar</button>
+      </div>
+      ${
+        cards ||
+        `<p class="muted" style="margin-top:12px">No hay pedidos pendientes. Se actualiza sola cada 10 s.</p>`
+      }
+    </section>
+  `;
+}
+
+function beepNuevoPedido() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.frequency.value = 880;
+    g.gain.value = 0.08;
+    o.start();
+    setTimeout(() => {
+      o.stop();
+      ctx.close();
+    }, 220);
+  } catch {
+    /* ignore */
+  }
+}
+
+function pedidoAVentaNorm(p) {
+  const notaParts = [
+    `Cliente: ${p.nombre_cliente}`,
+    `Tel: ${p.telefono}`,
+  ];
+  if (p.tipo_entrega === "delivery" && p.direccion) {
+    notaParts.push(`Dirección: ${p.direccion}`);
+  }
+  if (p.notas) notaParts.push(p.notas);
+  return {
+    id: p.id,
+    fecha_hora: p.creado_en || new Date().toISOString(),
+    metodo_pago: "webpay",
+    tipo_entrega: p.tipo_entrega,
+    cobro_delivery: Number(p.cobro_delivery) || 0,
+    total: Number(p.total) || 0,
+    estado: "pagado",
+    notas: notaParts.join(" || "),
+    cajero: "web",
+    detalles: (p.detalles || []).map((d) => ({
+      nombre: d.producto_nombre || `Producto #${d.producto}`,
+      cantidad: d.cantidad,
+      subtotal: Number(d.subtotal) || 0,
+      notas: d.notas || "",
+    })),
+  };
+}
+
+async function refreshPedidos({ silent = true } = {}) {
+  if (!state.user || !getTokens() || !state.online) return;
+  try {
+    const lista = await api.pedidos();
+    const ids = new Set(lista.map((p) => p.id));
+    const nuevos = lista.filter((p) => !state.pedidosKnownIds.has(p.id));
+    if (state.pedidosKnownIds.size && nuevos.length) {
+      beepNuevoPedido();
+      if (silent) toast(`${nuevos.length} pedido(s) web nuevo(s)`);
+    }
+    state.pedidos = lista;
+    state.pedidosKnownIds = ids;
+    if (state.view === "pedidos" || nuevos.length) render();
+  } catch (e) {
+    if (!silent) toast(e.message, true);
+  }
+}
+
+function startPedidosPolling() {
+  stopPedidosPolling();
+  refreshPedidos({ silent: true });
+  state.pedidosPollTimer = setInterval(() => refreshPedidos({ silent: true }), 10000);
+}
+
+function stopPedidosPolling() {
+  if (state.pedidosPollTimer) {
+    clearInterval(state.pedidosPollTimer);
+    state.pedidosPollTimer = null;
+  }
+}
+
 function renderInventario() {
   const enInventario = new Set(state.inventario.map((i) => i.producto));
   const disponibles = state.productos.filter((p) => !enInventario.has(p.id));
@@ -1036,6 +1201,7 @@ function renderReportes() {
           <div class="stat"><div class="label">Efectivo</div><div class="value">${money(r.total_efectivo)}</div></div>
           <div class="stat"><div class="label">Tarjetas</div><div class="value">${money(r.total_tarjetas)}</div></div>
           <div class="stat"><div class="label">Transferencias</div><div class="value">${money(r.total_transferencias)}</div></div>
+          <div class="stat"><div class="label">Webpay</div><div class="value">${money(r.total_webpay)}</div></div>
           <div class="stat"><div class="label">Total</div><div class="value">${money(r.total_general)}</div></div>
           <div class="stat"><div class="label">Retiro / Delivery</div><div class="value" style="font-size:1rem">${r.por_entrega?.retiro ?? 0} / ${r.por_entrega?.delivery ?? 0}</div></div>
         </div>
@@ -1067,6 +1233,7 @@ function renderCaja() {
           <div class="stat"><div class="label">Efectivo</div><div class="value">${money(p.total_efectivo)}</div></div>
           <div class="stat"><div class="label">Tarjetas</div><div class="value">${money(p.total_tarjetas)}</div></div>
           <div class="stat"><div class="label">Transferencias</div><div class="value">${money(p.total_transferencias)}</div></div>
+          <div class="stat"><div class="label">Webpay</div><div class="value">${money(p.total_webpay)}</div></div>
           <div class="stat"><div class="label">Total</div><div class="value">${money(p.total_general)}</div></div>
           <div class="stat"><div class="label">Ventas</div><div class="value">${p.cantidad_ventas}</div></div>
         </div>
@@ -1089,6 +1256,7 @@ function render() {
 
   let content = "";
   if (state.view === "pos") content = renderPos();
+  if (state.view === "pedidos") content = renderPedidos();
   if (state.view === "ventas") content = renderVentas();
   if (state.view === "inventario") content = renderInventario();
   if (state.view === "caja") content = renderCaja();
@@ -1103,6 +1271,9 @@ function bindShell() {
     clearSession();
     state.user = null;
     state.cart = [];
+    stopPedidosPolling();
+    state.pedidos = [];
+    state.pedidosKnownIds = new Set();
     render();
   });
 
@@ -1112,6 +1283,9 @@ function bindShell() {
     btn.addEventListener("click", async () => {
       state.view = btn.dataset.view;
       try {
+        if (state.view === "pedidos") {
+          await refreshPedidos({ silent: false });
+        }
         if (state.view === "ventas") {
           state.ventas = await api.ventas();
           state.ventaDetalle = null;
@@ -1128,6 +1302,35 @@ function bindShell() {
         toast(e.message, true);
       }
       render();
+    });
+  });
+
+  document.getElementById("btn-reload-pedidos")?.addEventListener("click", () =>
+    refreshPedidos({ silent: false })
+  );
+
+  document.querySelectorAll("[data-comanda-pedido]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.comandaPedido);
+      const p = state.pedidos.find((x) => x.id === id);
+      if (!p) return;
+      if (!imprimirComandaCocina(pedidoAVentaNorm(p))) {
+        toast("Permite ventanas emergentes para imprimir", true);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-recibir-pedido]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.recibirPedido);
+      try {
+        await api.recibirPedido(id);
+        toast(`Pedido #${id} recibido`);
+        await refreshPedidos({ silent: true });
+        render();
+      } catch (e) {
+        toast(e.message, true);
+      }
     });
   });
 
@@ -1663,7 +1866,7 @@ function bindShell() {
   });
 
   document.getElementById("btn-cerrar-caja")?.addEventListener("click", async () => {
-    const fecha = state.cajaPreview?.fecha || new Date().toISOString().slice(0, 10);
+    const fecha = state.cajaPreview?.fecha || fechaLocalHoy();
     try {
       await api.cerrarCaja(fecha);
       toast(`Caja cerrada: ${fecha}`);
@@ -1706,6 +1909,7 @@ async function cobrar() {
   const payload = {
     client_uuid: crypto.randomUUID(),
     fecha_hora: new Date().toISOString(),
+    cajero_id: state.user?.id ?? null,
     metodo_pago: state.metodo_pago,
     tipo_entrega: state.tipo_entrega,
     cobro_delivery: state.tipo_entrega === "delivery" ? String(state.cobro_delivery || 0) : "0",
@@ -1794,6 +1998,13 @@ async function cobrar() {
           })),
         });
       } catch (e) {
+        // Solo encolar si no hay respuesta del servidor (red). 4xx = rechazo real.
+        const status = e?.status;
+        if (status && status >= 400 && status < 500) {
+          cerrarVentanasImpresion(ventanasPrint);
+          toast(e.message || "El servidor rechazó la venta", true);
+          return;
+        }
         await savePendingSale(payload);
         await refreshPending();
         offline = true;
@@ -1856,6 +2067,7 @@ function imprimirReporteDiario(r) {
     <div>Efectivo: <strong>${money(r.total_efectivo)}</strong></div>
     <div>Tarjetas: <strong>${money(r.total_tarjetas)}</strong></div>
     <div>Transferencias: <strong>${money(r.total_transferencias)}</strong></div>
+    <div>Webpay: <strong>${money(r.total_webpay)}</strong></div>
     <div>Total: <strong>${money(r.total_general)}</strong></div>
     <div>Retiro: <strong>${r.por_entrega?.retiro ?? 0}</strong></div>
     <div>Delivery: <strong>${r.por_entrega?.delivery ?? 0}</strong></div>

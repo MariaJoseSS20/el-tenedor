@@ -1,21 +1,35 @@
-import { api } from "./api.js";
-import { listPendingSales, removePendingSales } from "./db.js";
+import { api, getCachedUser } from "./api.js";
+import {
+  listSyncableSales,
+  markSalesRejected,
+  removePendingSales,
+} from "./db.js";
 
 let syncing = false;
 
 /**
- * Empuja a /api/sync-ventas/ todas las ventas guardadas en IndexedDB.
- * Se dispara al volver online y manualmente desde la UI.
+ * Empuja a /api/sync-ventas/ las ventas pendientes del cajero en sesión.
+ * Las rechazadas se marcan con sync_error y no se reenvían.
  */
 export async function syncPendingSales() {
   if (syncing || !navigator.onLine) {
     return { skipped: true };
   }
+  const user = getCachedUser();
+  if (!user?.id) {
+    return { skipped: true };
+  }
+
   syncing = true;
   try {
-    const pending = await listPendingSales();
+    const pending = await listSyncableSales(user.id);
     if (!pending.length) {
-      return { creadas: [], omitidas_idempotentes: [], mensaje: "Nada pendiente." };
+      return {
+        creadas: [],
+        omitidas_idempotentes: [],
+        rechazadas: [],
+        mensaje: "Nada pendiente.",
+      };
     }
 
     const payload = pending.map((s) => ({
@@ -38,6 +52,7 @@ export async function syncPendingSales() {
       ...(result.omitidas_idempotentes || []),
     ];
     await removePendingSales(done);
+    await markSalesRejected(result.rechazadas || []);
     return result;
   } finally {
     syncing = false;

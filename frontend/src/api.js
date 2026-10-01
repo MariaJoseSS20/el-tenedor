@@ -143,6 +143,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(lote),
     }),
+  pedidos: () => request("/api/pedidos/"),
+  recibirPedido: (id) =>
+    request(`/api/pedidos/${id}/recibir/`, { method: "POST", body: "{}" }),
   cajaPreview: (fecha) => {
     const q = fecha ? `?fecha=${fecha}` : "";
     return request(`/api/caja-diaria/preview/${q}`);

@@ -178,6 +178,7 @@ REST_FRAMEWORK = {
         "anon": "30/minute",
         "user": "120/minute",
         "login": "10/minute",
+        "pedidos": "10/minute",
     },
 }
 
@@ -221,3 +222,18 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 # Usuarios demo en seed_menu (solo local o primer deploy explícito).
 SEED_DEMO_USERS = env_bool("SEED_DEMO_USERS", DEBUG)
+
+# Webpay / Transbank (integración por defecto; producción con WEBPAY_ENV=production).
+WEBPAY_ENV = os.environ.get("WEBPAY_ENV", "integration").strip().lower()
+WEBPAY_COMMERCE_CODE = os.environ.get("WEBPAY_COMMERCE_CODE", "").strip()
+WEBPAY_API_KEY = os.environ.get("WEBPAY_API_KEY", "").strip()
+# URL pública de la API (retorno de Webpay). Ej: https://api.onrender.com
+PUBLIC_API_BASE_URL = os.environ.get(
+    "PUBLIC_API_BASE_URL",
+    "http://127.0.0.1:8003",
+).rstrip("/")
+# Página del cliente tras el pago.
+FRONTEND_PEDIR_URL = os.environ.get(
+    "FRONTEND_PEDIR_URL",
+    "http://127.0.0.1:5180/pedir.html",
+).rstrip("/")
