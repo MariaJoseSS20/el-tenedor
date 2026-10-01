@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "path";
 
 export default defineConfig({
   server: {
@@ -9,6 +10,14 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:8003",
         changeOrigin: true,
+      },
+    },
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        pedir: resolve(__dirname, "pedir.html"),
       },
     },
   },
