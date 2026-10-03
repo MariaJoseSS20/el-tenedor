@@ -47,7 +47,14 @@ const state = {
   /** Modal agregar ítem simple: { producto, cantidad, nota } */
   addModal: null,
   metodo_pago: "efectivo",
-  tipo_entrega: "retiro",
+pago_mixto: {
+  efectivo: 0,
+  debito: 0,
+  credito: 0,
+  transferencia: 0,
+},
+tipo_entrega: "retiro",
+ 
   cobro_delivery: 0,
   /** Dirección obligatoria si la entrega es delivery. */
   direccion_delivery: "",
@@ -64,6 +71,7 @@ const state = {
   pedidosPollTimer: null,
   inventario: [],
   cajaPreview: null,
+  cajaCerrada: null,
   reporteFecha: fechaLocalHoy(),
   reporte: null,
   /** Confirmación salsa extra: { salsa } */
@@ -118,6 +126,17 @@ function money(n) {
     currency: "CLP",
     maximumFractionDigits: 0,
   }).format(Number(n) || 0);
+}
+
+function formatFecha(fecha) {
+  if (!fecha) return "—";
+
+  const partes = String(fecha).split("-");
+  if (partes.length !== 3) return fecha;
+
+  const [anio, mes, dia] = partes;
+
+  return `${dia}-${mes}-${anio.slice(-2)}`;
 }
 
 function toast(msg, isError = false) {
@@ -369,9 +388,12 @@ function renderCartCheckoutFields() {
         <div class="field">
           <label>Método de pago</label>
           <select id="metodo_pago">
-            <option value="efectivo" ${state.metodo_pago === "efectivo" ? "selected" : ""}>Efectivo</option>
-            <option value="tarjeta" ${state.metodo_pago === "tarjeta" ? "selected" : ""}>Tarjeta</option>
-            <option value="transferencia" ${state.metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option>
+          <option value="efectivo" ${state.metodo_pago === "efectivo" ? "selected" : ""}>Efectivo</option>
+          <option value="debito" ${state.metodo_pago === "debito" ? "selected" : ""}>Tarjeta débito</option>
+          <option value="credito" ${state.metodo_pago === "credito" ? "selected" : ""}>Tarjeta crédito</option>
+          <option value="transferencia" ${state.metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option>
+          <option value="mixto" ${state.metodo_pago === "mixto" ? "selected" : ""}>Pago mixto</option>
+           
           </select>
         </div>
         <div class="field">
@@ -386,6 +408,75 @@ function renderCartCheckoutFields() {
           <input id="cobro_delivery" type="number" min="0" step="100" value="${state.cobro_delivery}" ${state.tipo_entrega === "delivery" ? "" : "disabled"} />
         </div>
       </div>
+            ${
+        state.metodo_pago === "mixto"
+          ? `
+      <div class="field" style="margin-top:12px">
+        <label>Distribución del pago mixto</label>
+
+        <div class="cart-checkout-row">
+          <div class="field">
+            <label for="pago-mixto-efectivo">Efectivo</label>
+            <input
+              id="pago-mixto-efectivo"
+              data-pago-mixto="efectivo"
+              type="number"
+              min="0"
+              step="100"
+              value="${state.pago_mixto.efectivo || 0}"
+            />
+          </div>
+
+          <div class="field">
+            <label for="pago-mixto-debito">Débito</label>
+            <input
+              id="pago-mixto-debito"
+              data-pago-mixto="debito"
+              type="number"
+              min="0"
+              step="100"
+              value="${state.pago_mixto.debito || 0}"
+            />
+          </div>
+
+          <div class="field">
+            <label for="pago-mixto-credito">Crédito</label>
+            <input
+              id="pago-mixto-credito"
+              data-pago-mixto="credito"
+              type="number"
+              min="0"
+              step="100"
+              value="${state.pago_mixto.credito || 0}"
+            />
+          </div>
+
+          <div class="field">
+            <label for="pago-mixto-transferencia">Transferencia</label>
+            <input
+              id="pago-mixto-transferencia"
+              data-pago-mixto="transferencia"
+              type="number"
+              min="0"
+              step="100"
+              value="${state.pago_mixto.transferencia || 0}"
+            />
+          </div>
+        </div>
+
+        <p id="resumen-pago-mixto" class="sub" style="margin-top:8px">
+          Ingresado:
+          ${money(
+            Object.values(state.pago_mixto).reduce(
+              (total, monto) => total + (Number(monto) || 0),
+              0
+            )
+          )}
+          · Total venta: ${money(cartTotal())}
+        </p>
+      </div>`
+          : ""
+      }
       ${
         state.tipo_entrega === "delivery"
           ? `
@@ -1098,68 +1189,167 @@ function stopPedidosPolling() {
 }
 
 function renderInventario() {
-  const enInventario = new Set(state.inventario.map((i) => i.producto));
-  const disponibles = state.productos.filter((p) => !enInventario.has(p.id));
   const isAdmin = state.user?.rol === "administrador";
 
   const rows = state.inventario
     .map(
       (i) => `
-      <tr>
-        <td>${escapeHtml(i.producto_nombre)}</td>
-        <td>${escapeHtml(i.producto_categoria || "—")}</td>
-        <td>${money(i.producto_precio)}</td>
-        <td>${escapeHtml(i.producto_estado || "—")}</td>
-        <td>${escapeHtml(i.notas || "—")}</td>
-        <td>
-          ${
-            isAdmin
-              ? `<button class="btn btn-danger" data-quitar-inv="${i.id}" type="button">Quitar</button>`
-              : "—"
-          }
-        </td>
-      </tr>
-    `
-    )
-    .join("");
+        <tr>
+          <td>
+            ${
+              isAdmin
+                ? `<input
+                    type="text"
+                    id="nombre-inv-${i.id}"
+                    value="${escapeHtml(i.nombre || "")}"
+                    style="min-width:180px"
+                  />`
+                : escapeHtml(i.nombre || "—")
+            }
+          </td>
 
-  const opciones = disponibles
-    .map(
-      (p) =>
-        `<option value="${p.id}">${escapeHtml(p.nombre)} (${escapeHtml(p.categoria)})</option>`
+          <td>
+            ${
+              isAdmin
+                ? `<input
+                    type="number"
+                    id="cantidad-inv-${i.id}"
+                    value="${Number(i.cantidad) || 0}"
+                    min="0"
+                    step="1"
+                    style="width:110px"
+                  />`
+                : `${Number(i.cantidad) || 0} unidades`
+            }
+          </td>
+
+          <td>
+            ${
+              isAdmin
+                ? `<input
+                    type="text"
+                    id="notas-inv-${i.id}"
+                    value="${escapeHtml(i.notas || "")}"
+                    placeholder="Notas opcionales"
+                  />`
+                : escapeHtml(i.notas || "—")
+            }
+          </td>
+
+          <td>
+            ${
+              isAdmin
+                ? `
+                  <div class="row-actions">
+                    <button
+                      class="btn btn-mint"
+                      data-guardar-inv="${i.id}"
+                      type="button"
+                      style="width:auto"
+                    >
+                      Guardar
+                    </button>
+
+                    <button
+                      class="btn btn-danger"
+                      data-quitar-inv="${i.id}"
+                      type="button"
+                      style="width:auto"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                `
+                : "—"
+            }
+          </td>
+        </tr>
+      `
     )
     .join("");
 
   return `
     <section class="panel">
-      <h2>Inventario</h2>
-      <p class="sub">Solo aparecen productos que el administrador agregue aquí.</p>
+      <h2>Inventario de empaques</h2>
+
+      <p class="sub">
+        Registro manual de empaques y unidades disponibles.
+      </p>
+
       ${
         isAdmin
           ? `
-        <form id="form-agregar-inv" class="row-actions" style="align-items:end">
-          <div class="field" style="margin:0;flex:1;min-width:220px">
-            <label for="producto-inv">Agregar al inventario</label>
-            <select id="producto-inv" required ${disponibles.length ? "" : "disabled"}>
-              <option value="">${disponibles.length ? "Selecciona un producto…" : "No hay productos disponibles"}</option>
-              ${opciones}
-            </select>
-          </div>
-          <div class="field" style="margin:0;flex:1;min-width:180px">
-            <label for="notas-inv">Notas (opcional)</label>
-            <input id="notas-inv" type="text" placeholder="Ej. proveedor, ubicación…" />
-          </div>
-          <button class="btn btn-primary" type="submit" style="width:auto" ${disponibles.length ? "" : "disabled"}>
-            Agregar
-          </button>
-        </form>
-      `
+            <form
+              id="form-agregar-inv"
+              class="row-actions"
+              style="align-items:end"
+            >
+              <div class="field" style="margin:0;flex:1;min-width:200px">
+                <label for="nombre-inv">Empaque</label>
+                <input
+                  id="nombre-inv"
+                  type="text"
+                  placeholder="Ej. Caja sushi C-10"
+                  required
+                />
+              </div>
+
+              <div class="field" style="margin:0;min-width:150px">
+                <label for="cantidad-inv">Unidades</label>
+                <input
+                  id="cantidad-inv"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value="0"
+                  required
+                />
+              </div>
+
+              <div class="field" style="margin:0;flex:1;min-width:180px">
+                <label for="notas-inv">Notas (opcional)</label>
+                <input
+                  id="notas-inv"
+                  type="text"
+                  placeholder="Ej. proveedor, ubicación…"
+                />
+              </div>
+
+              <button
+                class="btn btn-primary"
+                type="submit"
+                style="width:auto"
+              >
+                Agregar
+              </button>
+            </form>
+          `
           : ""
       }
+
       <div style="overflow:auto;margin-top:16px">
         <table class="table">
-          <thead><tr><th>Producto</th><th>Categoría</th><th>Precio</th><th>Estado</th><th>Notas</th><th></th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="6" class="muted">Inventario vacío. El admin debe agregar productos.</td></tr>`}</tbody>
+          <thead>
+            <tr>
+              <th>Empaque</th>
+              <th>Unidades</th>
+              <th>Notas</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${
+              rows ||
+              `
+                <tr>
+                  <td colspan="4" class="muted">
+                    Inventario de empaques vacío.
+                  </td>
+                </tr>
+              `
+            }
+          </tbody>
         </table>
       </div>
     </section>
@@ -1168,52 +1358,216 @@ function renderInventario() {
 
 function renderReportes() {
   const r = state.reporte;
+
   const productos = (r?.por_producto || [])
     .map(
       (p) => `
-      <tr>
-        <td>${escapeHtml(p.nombre)}</td>
-        <td>${p.cantidad}</td>
-        <td>${money(p.monto)}</td>
-      </tr>`
+        <tr>
+          <td>${escapeHtml(p.nombre)}</td>
+          <td style="text-align:center">${p.cantidad}</td>
+          <td style="text-align:right"><strong>${money(p.monto)}</strong></td>
+        </tr>`
     )
     .join("");
 
   return `
     <section class="panel">
-      <h2>Reportes por día</h2>
-      <p class="sub">Ventas completadas, medios de pago y productos más vendidos.</p>
-      <div class="row-actions" style="align-items:end">
-        <div class="field" style="margin:0">
-          <label for="reporte-fecha">Fecha</label>
-          <input id="reporte-fecha" type="date" value="${escapeHtml(state.reporteFecha)}" />
+
+      <!-- ENCABEZADO -->
+      <div style="
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-end;
+        gap:16px;
+        flex-wrap:wrap;
+        margin-bottom:18px;
+      ">
+        <div>
+          <h2 style="margin-bottom:4px">Reporte diario</h2>
+          <p class="sub" style="margin:0">
+            Resumen de ventas y movimientos de la jornada.
+          </p>
         </div>
-        <button class="btn btn-mint" id="btn-cargar-reporte" type="button" style="width:auto">Ver reporte</button>
-        <button class="btn btn-ghost" id="btn-print-reporte" type="button" style="width:auto" ${r ? "" : "disabled"}>Imprimir</button>
+
+        <div class="row-actions" style="align-items:end;margin:0">
+          <div class="field" style="margin:0">
+            <label for="reporte-fecha">Fecha</label>
+            <input
+              id="reporte-fecha"
+              type="date"
+              value="${escapeHtml(state.reporteFecha)}"
+            />
+          </div>
+
+          <button
+            class="btn btn-ghost"
+            id="btn-print-reporte"
+            type="button"
+            style="width:auto"
+            ${r ? "" : "disabled"}
+          >
+            Imprimir
+          </button>
+        </div>
       </div>
+
       ${
         r
           ? `
-        <div class="stats" style="margin-top:16px">
-          <div class="stat"><div class="label">Fecha</div><div class="value" style="font-size:1rem;color:var(--text)">${escapeHtml(r.fecha)}</div></div>
-          <div class="stat"><div class="label">Ventas</div><div class="value">${r.cantidad_ventas}</div></div>
-          <div class="stat"><div class="label">Anuladas</div><div class="value">${r.cantidad_anuladas}</div></div>
-          <div class="stat"><div class="label">Efectivo</div><div class="value">${money(r.total_efectivo)}</div></div>
-          <div class="stat"><div class="label">Tarjetas</div><div class="value">${money(r.total_tarjetas)}</div></div>
-          <div class="stat"><div class="label">Transferencias</div><div class="value">${money(r.total_transferencias)}</div></div>
-          <div class="stat"><div class="label">Webpay</div><div class="value">${money(r.total_webpay)}</div></div>
-          <div class="stat"><div class="label">Total</div><div class="value">${money(r.total_general)}</div></div>
-          <div class="stat"><div class="label">Retiro / Delivery</div><div class="value" style="font-size:1rem">${r.por_entrega?.retiro ?? 0} / ${r.por_entrega?.delivery ?? 0}</div></div>
-        </div>
-        <h3 class="section-title" style="margin-top:8px">Por producto</h3>
-        <div style="overflow:auto">
-          <table class="table">
-            <thead><tr><th>Producto</th><th>Cant.</th><th>Monto</th></tr></thead>
-            <tbody>${productos || `<tr><td colspan="3" class="muted">Sin ventas ese día.</td></tr>`}</tbody>
-          </table>
-        </div>
-      `
-          : `<p class="muted" style="margin-top:16px">Elige una fecha y toca Ver reporte.</p>`
+            <!-- FECHA DEL REPORTE -->
+            <div style="
+              display:flex;
+              align-items:center;
+              justify-content:space-between;
+              margin-bottom:10px;
+            ">
+              <h3 class="section-title" style="margin:0">
+                Resumen del día
+              </h3>
+
+              <span class="muted" style="font-size:.9rem">
+                ${escapeHtml(formatFecha(r.fecha))}
+              </span>
+            </div>
+
+            <!-- RESUMEN PRINCIPAL -->
+            <div
+              class="stats"
+              style="
+                grid-template-columns:repeat(3, minmax(130px, 1fr));
+                margin-bottom:18px;
+              "
+            >
+              <div class="stat">
+                <div class="label">Ventas</div>
+                <div class="value">${r.cantidad_ventas}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Anuladas</div>
+                <div class="value">${r.cantidad_anuladas}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Total del día</div>
+                <div class="value">${money(r.total_general)}</div>
+              </div>
+            </div>
+
+            <!-- MEDIOS DE PAGO -->
+            <h3 class="section-title" style="margin:0 0 8px">
+              Medios de pago
+            </h3>
+
+            <div
+              style="
+                display:grid;
+                grid-template-columns:repeat(5, minmax(100px, 1fr));
+                gap:8px;
+                margin-bottom:18px;
+              "
+            >
+              <div class="stat" style="padding:10px 12px">
+                <div class="label">Efectivo</div>
+                <div class="value" style="font-size:1.05rem">
+                  ${money(r.total_efectivo)}
+                </div>
+              </div>
+
+              <div class="stat" style="padding:10px 12px">
+                <div class="label">Débito</div>
+                <div class="value" style="font-size:1.05rem">
+                  ${money(r.total_debito)}
+                </div>
+              </div>
+
+              <div class="stat" style="padding:10px 12px">
+                <div class="label">Crédito</div>
+                <div class="value" style="font-size:1.05rem">
+                  ${money(r.total_credito)}
+                </div>
+              </div>
+
+              <div class="stat" style="padding:10px 12px">
+                <div class="label">Transferencia</div>
+                <div class="value" style="font-size:1.05rem">
+                  ${money(r.total_transferencias)}
+                </div>
+              </div>
+
+              <div class="stat" style="padding:10px 12px">
+                <div class="label">Webpay</div>
+                <div class="value" style="font-size:1.05rem">
+                  ${money(r.total_webpay)}
+                </div>
+              </div>
+            </div>
+
+            <!-- ENTREGAS -->
+            <div
+              style="
+                display:flex;
+                align-items:center;
+                gap:22px;
+                flex-wrap:wrap;
+                padding:10px 14px;
+                margin-bottom:20px;
+                border:1px solid var(--border);
+                border-radius:10px;
+              "
+            >
+              <strong style="font-size:.9rem">Entregas</strong>
+
+              <span class="muted">
+                Retiro:
+                <strong style="color:var(--text)">
+                  ${r.por_entrega?.retiro ?? 0}
+                </strong>
+              </span>
+
+              <span class="muted">
+                Delivery:
+                <strong style="color:var(--text)">
+                  ${r.por_entrega?.delivery ?? 0}
+                </strong>
+              </span>
+            </div>
+
+            <!-- PRODUCTOS -->
+            <h3 class="section-title" style="margin:0 0 8px">
+              Detalle de productos vendidos
+            </h3>
+
+            <div style="overflow:auto">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th style="text-align:center">Cantidad</th>
+                    <th style="text-align:right">Monto</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  ${
+                    productos ||
+                    `
+                      <tr>
+                        <td colspan="3" class="muted">
+                          Sin ventas ese día.
+                        </td>
+                      </tr>
+                    `
+                  }
+                </tbody>
+              </table>
+            </div>
+          `
+          : `
+            <p class="muted" style="margin-top:16px">
+              Elige una fecha y toca Ver reporte.
+            </p>
+          `
       }
     </section>
   `;
@@ -1221,33 +1575,201 @@ function renderReportes() {
 
 function renderCaja() {
   const p = state.cajaPreview;
+  const cierre = state.cajaCerrada;
+  const movimientos = cierre?.movimientos || [];
+
+  const nombreMetodo = (metodo) => {
+    const nombres = {
+      efectivo: "Efectivo",
+      debito: "Débito",
+      credito: "Crédito",
+      transferencia: "Transferencia",
+      webpay: "Webpay",
+      tarjeta: "Tarjeta",
+    };
+
+    return nombres[metodo] || metodo;
+  };
+
+  const detalleMovimientos = movimientos
+    .map((mov) => {
+      const pagos = (mov.pagos || [])
+        .map(
+          (pago) =>
+            `${nombreMetodo(pago.metodo)} ${money(pago.monto)}`
+        )
+        .join(" + ");
+
+      const hora = mov.fecha_hora
+        ? new Date(mov.fecha_hora).toLocaleTimeString("es-CL", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—";
+
+      return `
+        <tr>
+          <td><strong>#${escapeHtml(mov.venta_id)}</strong></td>
+          <td>${escapeHtml(hora)}</td>
+          <td>${escapeHtml(mov.cajero || "—")}</td>
+          <td>${escapeHtml(pagos || "—")}</td>
+          <td style="text-align:right">
+            <strong>${money(mov.total)}</strong>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
   return `
     <section class="panel">
-      <h2>Cierre de caja</h2>
-      <p class="sub">Totales calculados desde ventas completadas del día.</p>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div>
+          <h2>${cierre ? "Cierre de caja" : "Cierre de caja"}</h2>
+          <p class="sub">
+            ${
+              cierre
+                ? `Resumen final correspondiente al ${escapeHtml(formatFecha(cierre.fecha))}.`
+                : "Totales calculados desde ventas completadas del día."
+            }
+          </p>
+        </div>
+
+        ${
+          cierre
+            ? `
+              <div style="
+                padding:8px 16px;
+                border:2px solid var(--navy);
+                border-radius:999px;
+                font-weight:800;
+              ">
+                CAJA CERRADA
+              </div>
+            `
+            : ""
+        }
+      </div>
+
       ${
         p
           ? `
-        <div class="stats">
-          <div class="stat"><div class="label">Fecha</div><div class="value" style="font-size:1rem;color:var(--text)">${escapeHtml(p.fecha)}</div></div>
-          <div class="stat"><div class="label">Efectivo</div><div class="value">${money(p.total_efectivo)}</div></div>
-          <div class="stat"><div class="label">Tarjetas</div><div class="value">${money(p.total_tarjetas)}</div></div>
-          <div class="stat"><div class="label">Transferencias</div><div class="value">${money(p.total_transferencias)}</div></div>
-          <div class="stat"><div class="label">Webpay</div><div class="value">${money(p.total_webpay)}</div></div>
-          <div class="stat"><div class="label">Total</div><div class="value">${money(p.total_general)}</div></div>
-          <div class="stat"><div class="label">Ventas</div><div class="value">${p.cantidad_ventas}</div></div>
-        </div>
-      `
+            <div class="stats">
+              <div class="stat">
+                <div class="label">Fecha</div>
+                <div class="value" style="font-size:1rem;color:var(--text)">
+                  ${escapeHtml(formatFecha(p.fecha))}
+                </div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Efectivo</div>
+                <div class="value">${money(p.total_efectivo)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Débito</div>
+                <div class="value">${money(p.total_debito)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Crédito</div>
+                <div class="value">${money(p.total_credito)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Transferencias</div>
+                <div class="value">${money(p.total_transferencias)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Webpay</div>
+                <div class="value">${money(p.total_webpay)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Total</div>
+                <div class="value">${money(p.total_general)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Ventas</div>
+                <div class="value">${p.cantidad_ventas}</div>
+              </div>
+            </div>
+          `
           : `<p class="muted">Cargando preview…</p>`
       }
-      <div class="row-actions">
-        <button class="btn btn-mint" id="btn-preview-caja" type="button">Actualizar preview</button>
-        <button class="btn btn-primary" id="btn-cerrar-caja" type="button" style="width:auto">Cerrar caja de hoy</button>
-      </div>
+
+      ${
+        cierre
+          ? `
+            <div style="margin-top:28px">
+              <h3 class="section-title">Detalle de movimientos</h3>
+
+              <div style="overflow:auto">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Venta</th>
+                      <th>Hora</th>
+                      <th>Cajero</th>
+                      <th>Forma de pago</th>
+                      <th style="text-align:right">Total</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    ${
+                      detalleMovimientos ||
+                      `
+                        <tr>
+                          <td colspan="5" class="muted">
+                            No hubo movimientos durante el día.
+                          </td>
+                        </tr>
+                      `
+                    }
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="row-actions">
+                <button
+                  class="btn btn-primary"
+                  id="btn-imprimir-cierre"
+                  type="button"
+                  style="width:auto"
+                >
+                  Imprimir cierre
+                </button>
+              </div>
+            </div>
+          `
+          : `
+            <div class="row-actions">
+              <button
+                class="btn btn-mint"
+                id="btn-preview-caja"
+                type="button"
+              >
+                Actualizar 
+              </button>
+
+              <button
+                class="btn btn-primary"
+                id="btn-cerrar-caja"
+                type="button"
+                style="width:auto"
+              >
+                Cerrar caja de hoy
+              </button>
+            </div>
+          `
+      }
     </section>
   `;
 }
-
 function render() {
   if (!state.user || !getTokens()) {
     renderLogin();
@@ -1294,7 +1816,15 @@ function bindShell() {
           state.inventario = await api.inventario();
           state.productos = await api.productos();
         }
-        if (state.view === "caja") state.cajaPreview = await api.cajaPreview();
+        if (state.view === "caja") {
+  state.cajaPreview = await api.cajaPreview();
+
+  if (state.cajaPreview?.cerrado_en) {
+    state.cajaCerrada = state.cajaPreview;
+  } else {
+    state.cajaCerrada = null;
+  }
+}
         if (state.view === "reportes") {
           state.reporte = await api.reporteDiario(state.reporteFecha);
         }
@@ -1702,9 +2232,41 @@ function bindShell() {
     });
   });
 
-  document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
-    state.metodo_pago = e.target.value;
+ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
+  state.metodo_pago = e.target.value;
+
+  if (state.metodo_pago !== "mixto") {
+    state.pago_mixto = {
+      efectivo: 0,
+      debito: 0,
+      credito: 0,
+      transferencia: 0,
+    };
+  }
+
+  render();
+});
+document.querySelectorAll("[data-pago-mixto]").forEach((input) => {
+  input.addEventListener("input", (e) => {
+    const metodo = e.target.dataset.pagoMixto;
+
+    state.pago_mixto[metodo] = Math.max(
+      0,
+      Number(e.target.value) || 0
+    );
+    const totalIngresado = Object.values(state.pago_mixto).reduce(
+  (total, monto) => total + (Number(monto) || 0),
+  0
+);
+
+const resumen = document.getElementById("resumen-pago-mixto");
+
+if (resumen) {
+  resumen.textContent =
+    `Ingresado: ${money(totalIngresado)} · Total venta: ${money(cartTotal())}`;
+}
   });
+});
   document.getElementById("tipo_entrega")?.addEventListener("change", (e) => {
     state.tipo_entrega = e.target.value;
     if (state.tipo_entrega === "retiro") {
@@ -1811,36 +2373,95 @@ function bindShell() {
       toast("Permite ventanas emergentes para imprimir", true);
     }
   });
+  
+  document.getElementById("reporte-fecha")?.addEventListener("change", async (e) => {
+  state.reporteFecha = e.target.value;
 
-  document.getElementById("btn-cargar-reporte")?.addEventListener("click", async () => {
-    const input = document.getElementById("reporte-fecha");
-    state.reporteFecha = input?.value || state.reporteFecha;
-    try {
-      state.reporte = await api.reporteDiario(state.reporteFecha);
-      render();
-    } catch (e) {
-      toast(e.message, true);
-    }
-  });
+  try {
+    state.reporte = await api.reporteDiario(state.reporteFecha);
+    render();
+  } catch (e) {
+    toast(e.message, true);
+  }
+});
   document.getElementById("btn-print-reporte")?.addEventListener("click", () => {
     if (!state.reporte) return;
     imprimirReporteDiario(state.reporte);
   });
 
-  document.getElementById("form-agregar-inv")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const producto = Number(document.getElementById("producto-inv").value);
-    const notas = document.getElementById("notas-inv").value.trim();
-    if (!producto) return;
+ document.getElementById("form-agregar-inv")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const nombre = document.getElementById("nombre-inv").value.trim();
+  const cantidad = Number(document.getElementById("cantidad-inv").value);
+  const notas = document.getElementById("notas-inv").value.trim();
+
+  if (!nombre) {
+    toast("Ingresa el nombre del empaque", true);
+    return;
+  }
+
+  if (!Number.isInteger(cantidad) || cantidad < 0) {
+    toast("Las unidades deben ser un número entero igual o mayor a 0", true);
+    return;
+  }
+
+  try {
+    await api.agregarInventario({
+      nombre,
+      cantidad,
+      notas,
+    });
+
+    state.inventario = await api.inventario();
+    toast("Empaque agregado al inventario");
+    render();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+document.querySelectorAll("[data-guardar-inv]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const id = btn.dataset.guardarInv;
+
+    const nombre = document
+      .getElementById(`nombre-inv-${id}`)
+      .value.trim();
+
+    const cantidad = Number(
+      document.getElementById(`cantidad-inv-${id}`).value
+    );
+
+    const notas = document
+      .getElementById(`notas-inv-${id}`)
+      .value.trim();
+
+    if (!nombre) {
+      toast("El nombre del empaque no puede estar vacío", true);
+      return;
+    }
+
+    if (!Number.isInteger(cantidad) || cantidad < 0) {
+      toast("Las unidades deben ser un número entero igual o mayor a 0", true);
+      return;
+    }
+
     try {
-      await api.agregarInventario({ producto, notas });
+      await api.patchInventario(id, {
+        nombre,
+        cantidad,
+        notas,
+      });
+
       state.inventario = await api.inventario();
-      toast("Producto agregado al inventario");
+      toast("Inventario actualizado");
       render();
     } catch (err) {
       toast(err.message, true);
     }
   });
+});
 
   document.querySelectorAll("[data-quitar-inv]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -1865,15 +2486,27 @@ function bindShell() {
     }
   });
 
-  document.getElementById("btn-cerrar-caja")?.addEventListener("click", async () => {
+    document.getElementById("btn-cerrar-caja")?.addEventListener("click", async () => {
     const fecha = state.cajaPreview?.fecha || fechaLocalHoy();
+
     try {
       await api.cerrarCaja(fecha);
-      toast(`Caja cerrada: ${fecha}`);
+      state.cajaCerrada = await api.cajaPreview(fecha);
+      toast(`Caja cerrada: ${formatFecha(fecha)}`);
       state.cajaPreview = await api.cajaPreview(fecha);
       render();
     } catch (e) {
       toast(e.message, true);
+    }
+  });
+
+  document.getElementById("btn-imprimir-cierre")?.addEventListener("click", () => {
+    if (!state.cajaCerrada) return;
+
+    const ok = imprimirCierreCaja(state.cajaCerrada);
+
+    if (!ok) {
+      toast("Permite ventanas emergentes para imprimir el cierre", true);
     }
   });
 }
@@ -1894,8 +2527,7 @@ async function cobrar() {
     state.direccion_delivery = dir;
   }
 
-  // Abrir ventanas en el mismo clic (antes del await) para no bloquear popups
-  const ventanasPrint = prepararVentanasImpresion();
+  
 
   const notaParts = [];
   if (state.tipo_entrega === "delivery" && state.direccion_delivery.trim()) {
@@ -1905,12 +2537,59 @@ async function cobrar() {
     notaParts.push(state.nota_pedido.trim());
   }
   const notasPedido = notaParts.join(" || ");
+  const totalVenta = cartTotal();
+let pagos = [];
+
+if (state.metodo_pago === "mixto") {
+  pagos = Object.entries(state.pago_mixto)
+    .map(([metodo, monto]) => ({
+      metodo,
+      monto: Number(monto) || 0,
+    }))
+    .filter((pago) => pago.monto > 0);
+
+  const totalPagos = pagos.reduce(
+    (total, pago) => total + pago.monto,
+    0
+  );
+
+  if (pagos.length < 2) {
+    toast("El pago mixto debe usar al menos dos medios de pago", true);
+    return;
+  }
+
+  if (totalPagos !== totalVenta) {
+    toast(
+      `Los pagos suman ${money(totalPagos)} y la venta total es ${money(totalVenta)}`,
+      true
+    );
+    return;
+  }
+} else {
+  pagos = [
+    {
+      metodo: state.metodo_pago,
+      monto: totalVenta,
+    },
+  ];
+}
+// Abrir ventanas de impresión solo después de validar el pago
+const ventanasPrint = prepararVentanasImpresion();
 
   const payload = {
     client_uuid: crypto.randomUUID(),
     fecha_hora: new Date().toISOString(),
     cajero_id: state.user?.id ?? null,
-    metodo_pago: state.metodo_pago,
+    metodo_pago:
+  state.metodo_pago === "debito" || state.metodo_pago === "credito"
+    ? "tarjeta"
+    : state.metodo_pago === "mixto"
+      ? "efectivo"
+      : state.metodo_pago,
+   pagos: pagos.map((pago) => ({
+    metodo: pago.metodo,
+    monto: String(pago.monto),
+  })),
     tipo_entrega: state.tipo_entrega,
     cobro_delivery: state.tipo_entrega === "delivery" ? String(state.cobro_delivery || 0) : "0",
     detalles: state.cart.flatMap((l) => {
@@ -1988,6 +2667,7 @@ async function cobrar() {
         ventaApi = await api.crearVenta({
           client_uuid: payload.client_uuid,
           metodo_pago: payload.metodo_pago,
+          pagos: payload.pagos,
           tipo_entrega: payload.tipo_entrega,
           cobro_delivery: payload.cobro_delivery,
           notas: payload.notas,
@@ -2046,41 +2726,487 @@ async function cobrar() {
   }
 }
 
+  function imprimirCierreCaja(cierre) {
+  if (!cierre) return false;
+
+  const nombreMetodo = (metodo) => {
+    const nombres = {
+      efectivo: "Efectivo",
+      debito: "Débito",
+      credito: "Crédito",
+      transferencia: "Transferencia",
+      webpay: "Webpay",
+      tarjeta: "Tarjeta",
+    };
+
+    return nombres[metodo] || metodo;
+  };
+
+  const movimientos = (cierre.movimientos || [])
+    .map((mov) => {
+      const pagos = (mov.pagos || [])
+        .map(
+          (pago) =>
+            `${nombreMetodo(pago.metodo)} ${money(pago.monto)}`
+        )
+        .join(" + ");
+
+      const hora = mov.fecha_hora
+        ? new Date(mov.fecha_hora).toLocaleTimeString("es-CL", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—";
+
+      return `
+        <tr>
+          <td>#${escapeHtml(mov.venta_id)}</td>
+          <td>${escapeHtml(hora)}</td>
+          <td>${escapeHtml(mov.cajero || "—")}</td>
+          <td>${escapeHtml(pagos || "—")}</td>
+          <td class="numero">${money(mov.total)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="es-CL">
+      <head>
+        <meta charset="utf-8" />
+        <title>Cierre de caja ${escapeHtml(cierre.fecha)}</title>
+
+        <style>
+          body {
+            font-family: system-ui, sans-serif;
+            padding: 32px;
+            color: #111;
+          }
+
+          h1 {
+            margin-bottom: 4px;
+          }
+
+          .subtitulo {
+            margin-top: 0;
+            color: #555;
+          }
+
+          .estado {
+            display: inline-block;
+            margin: 12px 0 20px;
+            padding: 6px 12px;
+            border: 2px solid #111;
+            border-radius: 20px;
+            font-weight: 700;
+          }
+
+          .resumen {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 24px;
+            margin: 16px 0 28px;
+          }
+
+          .total {
+            font-size: 18px;
+            font-weight: 800;
+          }
+
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+          }
+
+          th,
+          td {
+            padding: 8px 6px;
+            border-bottom: 1px solid #ccc;
+            text-align: left;
+            font-size: 13px;
+          }
+
+          th {
+            font-weight: 700;
+          }
+
+          .numero {
+            text-align: right;
+            font-weight: 700;
+          }
+
+          @media print {
+            body {
+              padding: 0;
+            }
+          }
+        </style>
+      </head>
+
+      <body>
+        <h1>El Tenedor — Cierre de caja</h1>
+
+        <p class="subtitulo">
+          Fecha: <strong>${escapeHtml(formatFecha(cierre.fecha))}</strong>
+        </p>
+
+        <div class="estado">CAJA CERRADA</div>
+
+        <div class="resumen">
+          <div>Efectivo: <strong>${money(cierre.total_efectivo)}</strong></div>
+          <div>Débito: <strong>${money(cierre.total_debito)}</strong></div>
+          <div>Crédito: <strong>${money(cierre.total_credito)}</strong></div>
+          <div>Transferencias: <strong>${money(cierre.total_transferencias)}</strong></div>
+          <div>Webpay: <strong>${money(cierre.total_webpay)}</strong></div>
+          <div>Ventas: <strong>${cierre.cantidad_ventas ?? 0}</strong></div>
+          <div class="total">
+            Total: ${money(cierre.total_general)}
+          </div>
+        </div>
+
+        <h2>Detalle de movimientos</h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Venta</th>
+              <th>Hora</th>
+              <th>Cajero</th>
+              <th>Forma de pago</th>
+              <th style="text-align:right">Total</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${
+              movimientos ||
+              `
+                <tr>
+                  <td colspan="5">
+                    No hubo movimientos durante el día.
+                  </td>
+                </tr>
+              `
+            }
+          </tbody>
+        </table>
+      </body>
+    </html>
+  `;
+
+  const ventana = window.open("", "_blank");
+
+  if (!ventana) return false;
+
+  ventana.document.open();
+  ventana.document.write(html);
+  ventana.document.close();
+
+  ventana.onload = () => {
+    ventana.focus();
+    ventana.print();
+  };
+
+  return true;
+}
+
 function imprimirReporteDiario(r) {
+  if (!r) {
+    toast("Primero carga un reporte", true);
+    return;
+  }
+
   const rows = (r.por_producto || [])
     .map(
-      (p) =>
-        `<tr><td>${escapeHtml(p.nombre)}</td><td>${p.cantidad}</td><td>${money(p.monto)}</td></tr>`
+      (p) => `
+        <tr>
+          <td>${escapeHtml(p.nombre)}</td>
+          <td class="center">${p.cantidad}</td>
+          <td class="right">${money(p.monto)}</td>
+        </tr>
+      `
     )
     .join("");
-  const html = `<!DOCTYPE html><html lang="es-CL"><head><meta charset="utf-8"/><title>Reporte ${escapeHtml(r.fecha)}</title>
-  <style>
-    body{font-family:system-ui,sans-serif;padding:24px;color:#111}
-    h1{font-size:1.25rem} table{width:100%;border-collapse:collapse;margin-top:12px}
-    th,td{border-bottom:1px solid #ccc;padding:6px 4px;text-align:left;font-size:13px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0;font-size:14px}
-  </style></head><body>
-  <h1>el Tenedor — Reporte ${escapeHtml(r.fecha)}</h1>
-  <div class="grid">
-    <div>Ventas: <strong>${r.cantidad_ventas}</strong></div>
-    <div>Anuladas: <strong>${r.cantidad_anuladas}</strong></div>
-    <div>Efectivo: <strong>${money(r.total_efectivo)}</strong></div>
-    <div>Tarjetas: <strong>${money(r.total_tarjetas)}</strong></div>
-    <div>Transferencias: <strong>${money(r.total_transferencias)}</strong></div>
-    <div>Webpay: <strong>${money(r.total_webpay)}</strong></div>
-    <div>Total: <strong>${money(r.total_general)}</strong></div>
-    <div>Retiro: <strong>${r.por_entrega?.retiro ?? 0}</strong></div>
-    <div>Delivery: <strong>${r.por_entrega?.delivery ?? 0}</strong></div>
-  </div>
-  <table><thead><tr><th>Producto</th><th>Cant.</th><th>Monto</th></tr></thead>
-  <tbody>${rows || "<tr><td colspan=3>Sin ventas</td></tr>"}</tbody></table>
-  <script>onload=()=>setTimeout(()=>print(),200)</script>
-  </body></html>`;
-  const w = window.open("", "_blank", "noopener,noreferrer,width=720,height=800");
+
+  const fecha = formatFecha(r.fecha);
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="es-CL">
+    <head>
+      <meta charset="utf-8" />
+      <title>Reporte diario ${escapeHtml(fecha)}</title>
+
+      <style>
+        * {
+          box-sizing: border-box;
+        }
+
+        body {
+          font-family: Arial, Helvetica, sans-serif;
+          color: #222;
+          margin: 0;
+          padding: 28px;
+          background: #fff;
+        }
+
+        .reporte {
+          max-width: 760px;
+          margin: 0 auto;
+        }
+
+        .header {
+          border-bottom: 2px solid #222;
+          padding-bottom: 14px;
+          margin-bottom: 20px;
+        }
+
+        .marca {
+          font-size: 24px;
+          font-weight: 800;
+          margin: 0;
+        }
+
+        .subtitulo {
+          margin: 4px 0 0;
+          color: #666;
+          font-size: 13px;
+        }
+
+        .fecha {
+          margin-top: 10px;
+          font-size: 14px;
+        }
+
+        h2 {
+          font-size: 15px;
+          margin: 22px 0 10px;
+          text-transform: uppercase;
+          letter-spacing: .5px;
+        }
+
+        .resumen {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+        }
+
+        .dato {
+          border: 1px solid #ddd;
+          border-radius: 8px;
+          padding: 10px 12px;
+        }
+
+        .dato-label {
+          color: #666;
+          font-size: 11px;
+          text-transform: uppercase;
+          margin-bottom: 4px;
+        }
+
+        .dato-valor {
+          font-size: 17px;
+          font-weight: 700;
+        }
+
+        .pagos {
+          display: grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 8px;
+        }
+
+        .pago {
+          border: 1px solid #ddd;
+          border-radius: 7px;
+          padding: 9px;
+          font-size: 12px;
+        }
+
+        .pago strong {
+          display: block;
+          margin-top: 4px;
+          font-size: 14px;
+        }
+
+        .entregas {
+          display: flex;
+          gap: 30px;
+          border: 1px solid #ddd;
+          border-radius: 8px;
+          padding: 10px 12px;
+          font-size: 13px;
+        }
+
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-top: 8px;
+        }
+
+        th {
+          background: #f4f4f4;
+          font-size: 12px;
+          text-transform: uppercase;
+          text-align: left;
+          padding: 9px 8px;
+          border-bottom: 1px solid #ccc;
+        }
+
+        td {
+          font-size: 13px;
+          padding: 9px 8px;
+          border-bottom: 1px solid #e5e5e5;
+        }
+
+        .center {
+          text-align: center;
+        }
+
+        .right {
+          text-align: right;
+        }
+
+        .footer {
+          margin-top: 28px;
+          padding-top: 12px;
+          border-top: 1px solid #ddd;
+          text-align: center;
+          color: #777;
+          font-size: 11px;
+        }
+
+        @media print {
+          body {
+            padding: 0;
+          }
+
+          .reporte {
+            max-width: none;
+          }
+        }
+      </style>
+    </head>
+
+    <body>
+      <main class="reporte">
+
+        <header class="header">
+          <p class="marca">el Tenedor</p>
+          <p class="subtitulo">Reporte diario de ventas</p>
+          <div class="fecha">
+            <strong>Fecha:</strong> ${escapeHtml(fecha)}
+          </div>
+        </header>
+
+        <h2>Resumen del día</h2>
+
+        <div class="resumen">
+          <div class="dato">
+            <div class="dato-label">Ventas</div>
+            <div class="dato-valor">${r.cantidad_ventas}</div>
+          </div>
+
+          <div class="dato">
+            <div class="dato-label">Anuladas</div>
+            <div class="dato-valor">${r.cantidad_anuladas}</div>
+          </div>
+
+          <div class="dato">
+            <div class="dato-label">Total del día</div>
+            <div class="dato-valor">${money(r.total_general)}</div>
+          </div>
+        </div>
+
+        <h2>Medios de pago</h2>
+
+        <div class="pagos">
+          <div class="pago">
+            Efectivo
+            <strong>${money(r.total_efectivo)}</strong>
+          </div>
+
+          <div class="pago">
+            Débito
+            <strong>${money(r.total_debito)}</strong>
+          </div>
+
+          <div class="pago">
+            Crédito
+            <strong>${money(r.total_credito)}</strong>
+          </div>
+
+          <div class="pago">
+            Transferencia
+            <strong>${money(r.total_transferencias)}</strong>
+          </div>
+
+          <div class="pago">
+            Webpay
+            <strong>${money(r.total_webpay)}</strong>
+          </div>
+        </div>
+
+        <h2>Entregas</h2>
+
+        <div class="entregas">
+          <span>
+            Retiro:
+            <strong>${r.por_entrega?.retiro ?? 0}</strong>
+          </span>
+
+          <span>
+            Delivery:
+            <strong>${r.por_entrega?.delivery ?? 0}</strong>
+          </span>
+        </div>
+
+        <h2>Detalle de productos vendidos</h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th class="center">Cantidad</th>
+              <th class="right">Monto</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${
+              rows ||
+              `
+                <tr>
+                  <td colspan="3">Sin ventas registradas ese día.</td>
+                </tr>
+              `
+            }
+          </tbody>
+        </table>
+
+        <div class="footer">
+          Reporte generado por el sistema de gestión de el Tenedor.
+        </div>
+
+      </main>
+
+      <script>
+        window.addEventListener("load", () => {
+          setTimeout(() => window.print(), 250);
+        });
+      </script>
+    </body>
+    </html>
+  `;
+
+  const w = window.open("", "_blank", "width=820,height=900");
+
   if (!w) {
     toast("Permite ventanas emergentes para imprimir", true);
     return;
   }
+
   w.document.open();
   w.document.write(html);
   w.document.close();
