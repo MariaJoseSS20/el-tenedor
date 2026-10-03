@@ -1,33 +1,27 @@
 """
 Serializers DRF — El Tenedor.
-
 Incluye Venta anidada con DetalleVenta y el payload de sync offline masivo.
 Sin control de stock: las ventas no descuentan cantidades de inventario.
 """
-
 from datetime import timedelta
 from decimal import Decimal
-
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
-
 from .models import (
     CajaDiaria,
     CustomUser,
     DetallePedido,
     DetalleVenta,
     Inventario,
+    PagoVenta,
     Pedido,
     Producto,
     Venta,
 )
-
 # Cobro fijo de delivery en pedidos web (mismo default del POS).
 COBRO_DELIVERY_WEB = Decimal("1500.00")
 USUARIO_PEDIDOS_WEB = "pedidos-web"
-
-
 def validar_entrega_y_cobro(tipo, cobro):
     """Misma regla para venta online y sync offline."""
     if cobro is None:
@@ -41,8 +35,6 @@ def validar_entrega_y_cobro(tipo, cobro):
             {"cobro_delivery": "Indique un cobro de delivery válido (>= 0)."}
         )
     return cobro
-
-
 def normalizar_fecha_sync(fecha):
     """
     Acepta la fecha del dispositivo solo si no es futura (margen 2 min)
@@ -52,15 +44,12 @@ def normalizar_fecha_sync(fecha):
     ahora = timezone.now()
     if fecha is None:
         return ahora
-
     if timezone.is_naive(fecha):
         fecha = timezone.make_aware(fecha, timezone.get_current_timezone())
-
     if fecha > ahora + timedelta(minutes=2):
         raise serializers.ValidationError(
             {"fecha_hora": "La fecha de la venta no puede ser futura."}
         )
-
     inicio_dia = timezone.localtime(ahora).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
@@ -73,60 +62,34 @@ def normalizar_fecha_sync(fecha):
             }
         )
     return fecha
-
-
 def dia_ya_cerrado(fecha_hora):
     """True si existe CajaDiaria para la fecha local de fecha_hora."""
     fecha = timezone.localtime(fecha_hora).date()
     return CajaDiaria.objects.filter(fecha=fecha).exists()
-
-
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ("id", "username", "first_name", "last_name", "email", "rol")
         read_only_fields = fields
-
-
 class InventarioSerializer(serializers.ModelSerializer):
-    producto_nombre = serializers.CharField(source="producto.nombre", read_only=True)
-    producto_categoria = serializers.CharField(source="producto.categoria", read_only=True)
-    producto_estado = serializers.CharField(source="producto.estado", read_only=True)
-    producto_precio = serializers.DecimalField(
-        source="producto.precio",
-        max_digits=10,
-        decimal_places=2,
-        read_only=True,
-    )
-
     class Meta:
         model = Inventario
         fields = (
             "id",
-            "producto",
-            "producto_nombre",
-            "producto_categoria",
-            "producto_estado",
-            "producto_precio",
+            "nombre",
+            "cantidad",
             "notas",
             "ultima_actualizacion",
         )
         read_only_fields = ("ultima_actualizacion",)
-
-    def validate_producto(self, producto):
-        qs = Inventario.objects.filter(producto=producto)
-        if self.instance is not None:
-            qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
+    def validate_nombre(self, value):
+        nombre = value.strip()
+        if not nombre:
             raise serializers.ValidationError(
-                f"'{producto.nombre}' ya está en el inventario."
+                "El nombre del empaque no puede estar vacío."
             )
-        return producto
-
-
+        return nombre
 class ProductoSerializer(serializers.ModelSerializer):
-    inventario = InventarioSerializer(read_only=True)
-
     class Meta:
         model = Producto
         fields = (
@@ -137,43 +100,52 @@ class ProductoSerializer(serializers.ModelSerializer):
             "categoria",
             "codigo_barras",
             "estado",
-            "inventario",
             "creado_en",
             "actualizado_en",
         )
         read_only_fields = ("creado_en", "actualizado_en")
-
     def validate_precio(self, value):
         if value is None or value <= 0:
             raise serializers.ValidationError("El precio debe ser mayor que 0.")
         return value
-
-
 class DetalleVentaSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source="producto.nombre", read_only=True)
-
     class Meta:
         model = DetalleVenta
         fields = ("id", "producto", "producto_nombre", "cantidad", "subtotal", "notas")
         read_only_fields = ("id", "subtotal")
-
     def validate_cantidad(self, value):
         if value is None or value < 1:
             raise serializers.ValidationError("La cantidad debe ser al menos 1.")
         return value
-
-
+class PagoVentaSerializer(serializers.ModelSerializer):
+    """Pago individual asociado a una venta."""
+    class Meta:
+        model = PagoVenta
+        fields = ("id", "metodo", "monto")
+        read_only_fields = ("id",)
+    def validate_monto(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("El monto del pago debe ser mayor que 0.")
+        return value
 class VentaSerializer(serializers.ModelSerializer):
     """
-    Serializer anidado: crea Venta + DetalleVenta en una sola petición.
+    Serializer anidado: crea Venta + DetalleVenta + PagoVenta.
     El cajero se toma del usuario autenticado (trazabilidad).
     fecha_hora es solo lectura: la fija el servidor.
+    `pagos` permite registrar uno o varios medios de pago.
+    `metodo_pago` se conserva temporalmente por compatibilidad con el sistema anterior.
     """
-
     detalles = DetalleVentaSerializer(many=True)
+    pagos = PagoVentaSerializer(many=True, required=False)
+    neto = serializers.SerializerMethodField()
+    iva = serializers.SerializerMethodField()
+    metodo_pago = serializers.ChoiceField(
+        choices=Venta.MetodoPago.choices,
+        required=False,
+    )
     cajero = CustomUserSerializer(read_only=True)
     cajero_id = serializers.PrimaryKeyRelatedField(source="cajero", read_only=True)
-
     class Meta:
         model = Venta
         fields = (
@@ -182,6 +154,8 @@ class VentaSerializer(serializers.ModelSerializer):
             "cajero",
             "cajero_id",
             "fecha_hora",
+            "neto",
+            "iva",
             "total",
             "metodo_pago",
             "tipo_entrega",
@@ -189,6 +163,7 @@ class VentaSerializer(serializers.ModelSerializer):
             "estado",
             "notas",
             "detalles",
+            "pagos",
             "creado_en",
         )
         read_only_fields = (
@@ -200,18 +175,33 @@ class VentaSerializer(serializers.ModelSerializer):
             "cajero_id",
             "fecha_hora",
         )
+        
+    def get_neto(self, obj):
+        total = Decimal(obj.total or 0)
+        return (total / Decimal("1.19")).quantize(Decimal("0.01"))
 
+    def get_iva(self, obj):
+        total = Decimal(obj.total or 0)
+        neto = (total / Decimal("1.19")).quantize(Decimal("0.01"))
+        return (total - neto).quantize(Decimal("0.01"))
+    
     def validate_detalles(self, value):
         if not value:
             raise serializers.ValidationError("La venta debe incluir al menos un detalle.")
         return value
-
+    def validate_pagos(self, value):
+        if not value:
+            raise serializers.ValidationError("La lista de pagos no puede estar vacía.")
+        return value
     def validate(self, attrs):
         tipo = attrs.get("tipo_entrega")
         cobro = attrs.get("cobro_delivery", Decimal("0.00"))
         validar_entrega_y_cobro(tipo, cobro)
+        if not attrs.get("pagos") and not attrs.get("metodo_pago"):
+            raise serializers.ValidationError(
+                {"pagos": "Indique al menos un pago para la venta."}
+            )
         return attrs
-
     def _validar_y_obtener_productos(self, detalles_data):
         """Valida que los productos existan y estén activos."""
         ids = {item["producto"].pk for item in detalles_data}
@@ -219,7 +209,6 @@ class VentaSerializer(serializers.ModelSerializer):
             p.pk: p
             for p in Producto.objects.filter(pk__in=ids)
         }
-
         for producto_id in ids:
             producto = productos.get(producto_id)
             if producto is None:
@@ -231,15 +220,34 @@ class VentaSerializer(serializers.ModelSerializer):
                     {"detalles": f"El producto '{producto.nombre}' está inactivo."}
                 )
         return productos
-
+    @staticmethod
+    def _metodo_legacy_desde_pagos(pagos_data):
+        """
+        Mantiene Venta.metodo_pago mientras el resto del proyecto migra a PagoVenta.
+        Débito/crédito se representan temporalmente como 'tarjeta' en el campo antiguo.
+        """
+        metodos = {p["metodo"] for p in pagos_data}
+        if PagoVenta.MetodoPago.WEBPAY in metodos:
+            return Venta.MetodoPago.WEBPAY
+        if (
+            PagoVenta.MetodoPago.DEBITO in metodos
+            or PagoVenta.MetodoPago.CREDITO in metodos
+        ):
+            return Venta.MetodoPago.TARJETA
+        if PagoVenta.MetodoPago.EFECTIVO in metodos:
+            return Venta.MetodoPago.EFECTIVO
+        return Venta.MetodoPago.TRANSFERENCIA
     @transaction.atomic
     def create(self, validated_data):
         detalles_data = validated_data.pop("detalles")
+        pagos_data = validated_data.pop("pagos", None)
+        metodo_pago_legacy = validated_data.get("metodo_pago")
+        if pagos_data:
+            validated_data["metodo_pago"] = self._metodo_legacy_desde_pagos(pagos_data)
         request = self.context["request"]
         validated_data["cajero"] = request.user
         validated_data["estado"] = Venta.Estado.COMPLETADA
         validated_data["fecha_hora"] = timezone.now()
-
         if dia_ya_cerrado(validated_data["fecha_hora"]):
             raise serializers.ValidationError(
                 {
@@ -248,12 +256,9 @@ class VentaSerializer(serializers.ModelSerializer):
                     )
                 }
             )
-
         productos = self._validar_y_obtener_productos(detalles_data)
-
         venta = Venta.objects.create(**validated_data)
         total_detalles = Decimal("0.00")
-
         for item in detalles_data:
             producto = productos[item["producto"].pk]
             cantidad = item["cantidad"]
@@ -266,19 +271,41 @@ class VentaSerializer(serializers.ModelSerializer):
                 notas=item.get("notas") or "",
             )
             total_detalles += subtotal
-
         cobro = validated_data.get("cobro_delivery") or Decimal("0.00")
-        venta.total = total_detalles + cobro
+        venta.total = (total_detalles + cobro).quantize(Decimal("0.01"))
         venta.save(update_fields=["total"])
+        if pagos_data:
+            total_pagos = sum(
+                (pago["monto"] for pago in pagos_data),
+                Decimal("0.00"),
+            ).quantize(Decimal("0.01"))
+            if total_pagos != venta.total:
+                raise serializers.ValidationError(
+                    {
+                        "pagos": (
+                            f"La suma de los pagos ({total_pagos}) debe coincidir "
+                            f"con el total de la venta ({venta.total})."
+                        )
+                    }
+                )
+            for pago in pagos_data:
+                PagoVenta.objects.create(venta=venta, **pago)
+        elif metodo_pago_legacy in (
+            Venta.MetodoPago.EFECTIVO,
+            Venta.MetodoPago.TRANSFERENCIA,
+            Venta.MetodoPago.WEBPAY,
+        ):
+            PagoVenta.objects.create(
+                venta=venta,
+                metodo=metodo_pago_legacy,
+                monto=venta.total,
+            )
         return venta
-
-
 class SyncVentaItemSerializer(serializers.Serializer):
     """
     Ítem del lote offline. La validación de negocio (fecha, delivery, productos)
     se hace por ítem en la vista para no bloquear el resto del lote.
     """
-
     client_uuid = serializers.UUIDField(required=True)
     fecha_hora = serializers.DateTimeField(required=False, allow_null=True)
     metodo_pago = serializers.ChoiceField(choices=Venta.MetodoPago.choices)
@@ -291,28 +318,21 @@ class SyncVentaItemSerializer(serializers.Serializer):
     )
     notas = serializers.CharField(required=False, allow_blank=True, default="")
     detalles = DetalleVentaSerializer(many=True)
-
     def validate_detalles(self, value):
         if not value:
             raise serializers.ValidationError("Cada venta debe incluir al menos un detalle.")
         return value
-
-
 class SyncVentasSerializer(serializers.Serializer):
     """
     Payload de POST /api/sync-ventas/
-
     Espera un array JSON de ventas (también acepta {"ventas": [...]}).
     Solo valida estructura del lote; cada ítem se valida al procesarlo.
     """
-
     ventas = serializers.ListField(child=serializers.DictField(), allow_empty=False)
-
     def to_internal_value(self, data):
         if isinstance(data, list):
             data = {"ventas": data}
         return super().to_internal_value(data)
-
     def validate_ventas(self, value):
         if not value:
             raise serializers.ValidationError("El lote de sincronización está vacío.")
@@ -329,8 +349,6 @@ class SyncVentasSerializer(serializers.Serializer):
                 "Hay client_uuid duplicados dentro del mismo lote."
             )
         return value
-
-
 class CajaDiariaSerializer(serializers.ModelSerializer):
     usuario_cierre = CustomUserSerializer(read_only=True)
     total_general = serializers.DecimalField(
@@ -338,7 +356,6 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
         decimal_places=2,
         read_only=True,
     )
-
     class Meta:
         model = CajaDiaria
         fields = (
@@ -346,6 +363,8 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
             "fecha",
             "total_efectivo",
             "total_tarjetas",
+            "total_debito",
+            "total_credito",
             "total_transferencias",
             "total_webpay",
             "total_general",
@@ -355,48 +374,36 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
         read_only_fields = (
             "total_efectivo",
             "total_tarjetas",
+            "total_debito",
+            "total_credito",
             "total_transferencias",
             "total_webpay",
             "total_general",
             "usuario_cierre",
             "cerrado_en",
         )
-
-
 class CajaDiariaCierreSerializer(serializers.Serializer):
     """Entrada para calcular y persistir el cierre de una fecha."""
-
     fecha = serializers.DateField(required=True)
-
-
 class CartaProductoSerializer(serializers.ModelSerializer):
     """Catálogo público: solo campos necesarios para armar el pedido."""
-
     class Meta:
         model = Producto
         fields = ("id", "nombre", "descripcion", "precio", "categoria")
         read_only_fields = fields
-
-
 class DetallePedidoSerializer(serializers.ModelSerializer):
     producto_nombre = serializers.CharField(source="producto.nombre", read_only=True)
-
     class Meta:
         model = DetallePedido
         fields = ("id", "producto", "producto_nombre", "cantidad", "subtotal", "notas")
         read_only_fields = ("id", "subtotal", "producto_nombre")
-
-
 class DetallePedidoCreateSerializer(serializers.Serializer):
     producto = serializers.PrimaryKeyRelatedField(queryset=Producto.objects.all())
     cantidad = serializers.IntegerField(min_value=1)
     notas = serializers.CharField(required=False, allow_blank=True, default="")
-
-
 class PedidoSerializer(serializers.ModelSerializer):
     detalles = DetallePedidoSerializer(many=True, read_only=True)
     venta_id = serializers.PrimaryKeyRelatedField(source="venta", read_only=True)
-
     class Meta:
         model = Pedido
         fields = (
@@ -417,11 +424,8 @@ class PedidoSerializer(serializers.ModelSerializer):
             "actualizado_en",
         )
         read_only_fields = fields
-
-
 class PedidoCreateSerializer(serializers.Serializer):
     """Alta pública: el servidor fija precios, delivery y total."""
-
     nombre_cliente = serializers.CharField(max_length=120)
     telefono = serializers.CharField(max_length=30)
     tipo_entrega = serializers.ChoiceField(choices=Venta.TipoEntrega.choices)
@@ -430,24 +434,20 @@ class PedidoCreateSerializer(serializers.Serializer):
     )
     notas = serializers.CharField(required=False, allow_blank=True, default="")
     detalles = DetallePedidoCreateSerializer(many=True)
-
     def validate_nombre_cliente(self, value):
         nombre = (value or "").strip()
         if len(nombre) < 2:
             raise serializers.ValidationError("Indique el nombre del cliente.")
         return nombre
-
     def validate_telefono(self, value):
         tel = (value or "").strip()
         if len(tel) < 8:
             raise serializers.ValidationError("Indique un teléfono válido.")
         return tel
-
     def validate_detalles(self, value):
         if not value:
             raise serializers.ValidationError("El pedido debe incluir al menos un ítem.")
         return value
-
     def validate(self, attrs):
         tipo = attrs.get("tipo_entrega")
         direccion = (attrs.get("direccion") or "").strip()
@@ -459,7 +459,6 @@ class PedidoCreateSerializer(serializers.Serializer):
             attrs["direccion"] = ""
         else:
             attrs["direccion"] = direccion
-
         if dia_ya_cerrado(timezone.now()):
             raise serializers.ValidationError(
                 {
@@ -468,7 +467,6 @@ class PedidoCreateSerializer(serializers.Serializer):
                     )
                 }
             )
-
         ids = {item["producto"].pk for item in attrs["detalles"]}
         productos = {
             p.pk: p

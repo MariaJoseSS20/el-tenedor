@@ -46,8 +46,8 @@ class ProductoAdmin(admin.ModelAdmin):
 
 @admin.register(Inventario)
 class InventarioAdmin(admin.ModelAdmin):
-    list_display = ("producto", "ultima_actualizacion")
-    search_fields = ("producto__nombre",)
+    list_display = ("nombre", "cantidad", "ultima_actualizacion")
+    search_fields = ("nombre",)
     readonly_fields = ("ultima_actualizacion",)
 
 
