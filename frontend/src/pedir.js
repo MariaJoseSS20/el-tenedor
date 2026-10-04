@@ -769,6 +769,13 @@ function renderMain() {
         ${renderMenu()}
       </main>
 
+      <!-- DATOS DE CONTACTO (Pie de página) -->
+      <footer style="text-align: center; padding: 2rem 1rem 4rem; font-size: 0.85rem; opacity: 0.8; border-top: 1px solid rgba(0,0,0,0.08); margin-top: 2rem;">
+        <p style="margin: 0 0 0.25rem;"><strong>El Tenedor — General del Canto</strong></p>
+        <p style="margin: 0 0 0.25rem;">📍 Calle General Estanislao del Canto 326, Punta Arenas, Chile</p>
+        <p style="margin: 0;">📱 Consultas / Pedidos: <a href="https://wa.me/+56954332805" target="_blank" style="color: inherit; font-weight: bold;">+56 9 5433 2805</a></p>
+      </footer>
+
       ${
         n
           ? `<button type="button" class="pedir-fab" id="btn-fab-cart">

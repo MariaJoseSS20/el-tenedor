@@ -38,7 +38,10 @@ export function normalizarVentaParaTicket(ventaOPayload, opts = {}) {
       total: Number(ventaOPayload.total) || 0,
       estado: ventaOPayload.estado || "completada",
       notas: ventaOPayload.notas || "",
-      cajero: ventaOPayload.cajero?.username || opts.cajero || "",
+      cajero: (typeof ventaOPayload.cajero === "string" ? ventaOPayload.cajero : ventaOPayload.cajero?.username) || opts.cajero || "",
+      cliente_nombre: ventaOPayload.cliente_nombre || (typeof ventaOPayload.cliente === "string" ? ventaOPayload.cliente : ventaOPayload.cliente?.nombre) || "",
+      paga_con: ventaOPayload.paga_con || null,
+      vuelto: ventaOPayload.vuelto || null,
       detalles: (ventaOPayload.detalles || []).map((d) => ({
         nombre: d.producto_nombre || d.nombre || `Producto #${d.producto}`,
         cantidad: d.cantidad,
@@ -115,6 +118,10 @@ export function imprimirTicketCliente(ventaNorm, win = null) {
       <div>Pedido #${esc(ventaNorm.id)}</div>
       <div>${esc(fechaLocal(ventaNorm.fecha_hora))}</div>
       <div>Pago: ${esc(ventaNorm.metodo_pago)} · ${esc(ventaNorm.tipo_entrega)}</div>
+      ${(ventaNorm.cliente_nombre || ventaNorm.cliente) 
+        ? `<div>Cliente: ${esc(ventaNorm.cliente_nombre || ventaNorm.cliente)}</div>` 
+        : ""
+      }
       ${ventaNorm.cajero ? `<div>Cajero: ${esc(ventaNorm.cajero)}</div>` : ""}
       ${ventaNorm.notas ? `<div><strong>Nota:</strong> ${esc(ventaNorm.notas)}</div>` : ""}
     </div>
@@ -124,6 +131,8 @@ export function imprimirTicketCliente(ventaNorm, win = null) {
     <hr />
     <div class="total"><span>TOTAL</span><span>${esc(money(ventaNorm.total))}</span></div>
     <p class="sub" style="margin-top:14px">¡Gracias!</p>
+    <p class="sub" style="margin-top:6px; font-size:11px;">📍 Calle General Estanislao del Canto 326, General del Canto, Punta Arenas</p>
+    <p class="sub" style="margin-top:2px; font-size:11px;">📱 WhatsApp: +56 9 54332805</p>
   `;
 
   return escribirImpresion(documentoHtml(`Ticket #${ventaNorm.id}`, body), win);

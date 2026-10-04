@@ -69,6 +69,8 @@ const state = {
   /** Confirmación salsa extra: { salsa } */
   confirmSalsa: null,
   toast: null,
+  cliente_nombre:"",
+  paga_con: "",
 };
 
 /** Fecha YYYY-MM-DD en zona del local (Punta Arenas). */
@@ -374,6 +376,8 @@ function renderCartCheckoutFields() {
             <option value="transferencia" ${state.metodo_pago === "transferencia" ? "selected" : ""}>Transferencia</option>
           </select>
         </div>
+
+        
         <div class="field">
           <label>Entrega</label>
           <select id="tipo_entrega">
@@ -386,6 +390,30 @@ function renderCartCheckoutFields() {
           <input id="cobro_delivery" type="number" min="0" step="100" value="${state.cobro_delivery}" ${state.tipo_entrega === "delivery" ? "" : "disabled"} />
         </div>
       </div>
+      
+      <!-- Fila de Efectivo amplia para 6 cifras (Fuera de cart-checkout-row) -->
+      ${state.metodo_pago === 'Efectivo' || state.metodo_pago === 'efectivo' ? `
+        <div style="display: flex; gap: 12px; align-items: center; background: #f8f9fa; padding: 10px; border-radius: 8px; margin: 8px 0; border: 1px solid #e2e8f0;">
+          <div style="flex: 1.2;">
+            <label for="paga_con" style="font-size: 11px; font-weight: bold; text-transform: uppercase; display: block; margin-bottom: 2px;">Paga con ($)</label>
+            <input 
+              type="number" 
+              id="paga_con" 
+              placeholder="Ej: 100000" 
+              value="${state.paga_con || ''}"
+              style="width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 15px; font-weight: 600;"
+            />
+          </div>
+          <div style="flex: 1; text-align: right;">
+            <label style="font-size: 11px; font-weight: bold; text-transform: uppercase; color: #5c6b73; display: block;">Vuelto</label>
+            <div id="vuelto-display" style="font-size: 17px; font-weight: bold; margin-top: 2px; color: ${ (Number(state.paga_con) || 0) < cartTotal() ? '#d9534f' : '#2e7d32' };">
+              ${money(Math.max(0, (Number(state.paga_con) || 0) - cartTotal()))}
+            </div> 
+          </div>
+        </div>
+      ` : ''}
+
+
       ${
         state.tipo_entrega === "delivery"
           ? `
@@ -395,16 +423,26 @@ function renderCartCheckoutFields() {
       </div>`
           : ""
       }
+      
+      <div class="field">
+        <label for="cliente_nombre">Nombre del cliente</label>
+        <input 
+          type="text" 
+          id="cliente_nombre" 
+          placeholder="Ej: Juan Pérez / Mesa 3" 
+          value="${escapeHtml(state.cliente_nombre || '')}" 
+        />
+      </div>
       <div class="field">
         <label for="nota_pedido">Nota del pedido</label>
         <textarea id="nota_pedido" rows="2" placeholder="Ej. sin cubiertos, tocar timbre, alergia…">${escapeHtml(state.nota_pedido)}</textarea>
       </div>
-      <div class="cart-total"><span>Total</span><span class="price-tag">${money(cartTotal())}</span></div>
-      ${
+      <div class="cart-total"><span>Total</span><span class="price-tag">${money(cartTotal())}</span></div>${
         !state.cart.length
           ? `<p class="cart-error" role="alert">Agrega al menos un producto para enviar el pedido.</p>`
           : ""
       }
+
       <div class="cart-actions">
         <button class="btn btn-primary" id="btn-cobrar" type="button">
           ${state.online ? "Cobrar y enviar" : "Cobrar offline"}
@@ -858,7 +896,7 @@ function renderPostCobroModal() {
             <p class="pedido-kicker">Pedido listo</p>
             <h2>Impresión enviada</h2>
           </div>
-          <button type="button" class="modal-x" id="btn-cerrar-postcobro" aria-label="Cerrar">×</button>
+          <button type="button" class="modal-x" id="btn-cerrar-postcobro" aria-label="Cerrar" onclick="state.postCobro = null; document.getElementById('postcobro-overlay').remove();">&times;</button>
         </header>
         <div class="pedido-modal-body">
           <p class="sub" style="margin:0">Pedido #${escapeHtml(pc.id)} · ${money(pc.total)}</p>
@@ -986,7 +1024,7 @@ function renderPedidos() {
       return `
       <article class="pedido-card">
         <h3>Pedido #${p.id} · ${money(p.total)}</h3>
-        <p><strong>${escapeHtml(p.nombre_cliente)}</strong> · ${escapeHtml(p.telefono)}</p>
+        <p><strong>${escapeHtml(p.cliente_nombre)}</strong> · ${escapeHtml(p.telefono)}</p>
         <p class="sub">
           ${escapeHtml(p.tipo_entrega)}${
             p.direccion ? ` · ${escapeHtml(p.direccion)}` : ""
@@ -1040,7 +1078,7 @@ function beepNuevoPedido() {
 
 function pedidoAVentaNorm(p) {
   const notaParts = [
-    `Cliente: ${p.nombre_cliente}`,
+    `Cliente: ${p.cliente_nombre}`,
     `Tel: ${p.telefono}`,
   ];
   if (p.tipo_entrega === "delivery" && p.direccion) {
@@ -1728,10 +1766,38 @@ function bindShell() {
     state.nota_pedido = e.target.value;
   });
 
+  document.getElementById("cliente_nombre")?.addEventListener("input", (e) => {
+  state.cliente_nombre = e.target.value;
+  });
+
+  document.getElementById("paga_con")?.addEventListener("input", (e) => {
+  state.paga_con = e.target.value;
+  const vueltoEl = document.getElementById("vuelto-display");
+  if (vueltoEl) {
+    const pagaCon = Number(state.paga_con) || 0;
+    const total = cartTotal();
+    const vuelto = Math.max(0, pagaCon - total);
+
+    vueltoEl.textContent = money(vuelto);
+    vueltoEl.style.color = pagaCon < total ? '#d9534f' : '#2e7d32';
+  }
+});
+  
+
+document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
+  state.metodo_pago = e.target.value;
+  if (state.metodo_pago !== "Efectivo" && state.metodo_pago !== "efectivo") {
+    state.paga_con = ""; // Se limpia si cambias a Tarjeta o Transferencia
+  }
+  render();
+});
+
   document.getElementById("btn-limpiar")?.addEventListener("click", () => {
     state.cart = [];
     state.cartOpen = false;
     state.nota_pedido = "";
+    state.cliente_nombre = "";
+    state.paga_con = "";
     state.direccion_delivery = "";
     render();
   });
@@ -1801,13 +1867,32 @@ function bindShell() {
   });
   document.getElementById("btn-print-ticket")?.addEventListener("click", () => {
     if (!state.postCobro) return;
-    if (!imprimirTicketCliente(state.postCobro)) {
+    const ventaConCliente = {
+      ...state.postCobro,
+      cliente_nombre:
+        state.postCobro.cliente_nombre ||
+        state.postCobro.cliente ||
+        state.cliente_nombre ||
+        document.getElementById("cliente_nombre")?.value.trim() ||
+        "",
+    };
+    if (!imprimirTicketCliente(normalizarVentaParaTicket(ventaConCliente))) {
       toast("Permite ventanas emergentes para imprimir", true);
     }
   });
+
   document.getElementById("btn-print-cocina")?.addEventListener("click", () => {
     if (!state.postCobro) return;
-    if (!imprimirComandaCocina(state.postCobro)) {
+    const ventaConCliente = {
+    ...state.postCobro,
+    cliente_nombre:
+      state.postCobro.cliente_nombre ||
+      state.postCobro.cliente ||
+      state.cliente_nombre ||
+      document.getElementById("cliente_nombre")?.value.trim() ||
+      "",
+    };
+    if (!imprimirComandaCocina(normalizarVentaParaTicket(ventaConCliente))) {
       toast("Permite ventanas emergentes para imprimir", true);
     }
   });
@@ -1905,13 +1990,26 @@ async function cobrar() {
     notaParts.push(state.nota_pedido.trim());
   }
   const notasPedido = notaParts.join(" || ");
+  const pagaConMonto = Number(state.paga_con) || 0;
+  const vueltoCalculado = Math.max(0, pagaConMonto - cartTotal());
+  const inputCliente = document.getElementById("cliente_nombre");
+  if (inputCliente) {
+  inputCliente.addEventListener('input', (e) => {
+    state.cliente_nombre = e.target.value;
+  });
+}
+  const clienteNombre = inputCliente ? inputCliente.value.trim() : (state.cliente_nombre || "");
 
   const payload = {
     client_uuid: crypto.randomUUID(),
     fecha_hora: new Date().toISOString(),
     cajero_id: state.user?.id ?? null,
     metodo_pago: state.metodo_pago,
+    paga_con: state.metodo_pago === "Efectivo" || state.metodo_pago === "efectivo" ? pagaConMonto : cartTotal(),
+    vuelto: state.metodo_pago === "Efectivo" || state.metodo_pago === "efectivo" ? vueltoCalculado : 0,
     tipo_entrega: state.tipo_entrega,
+    cliente_nombre: state.cliente_nombre || document.getElementById('cliente_nombre')?.value || "",
+    notas: state.nota_pedido || "",
     cobro_delivery: state.tipo_entrega === "delivery" ? String(state.cobro_delivery || 0) : "0",
     detalles: state.cart.flatMap((l) => {
       let notas = "";
@@ -2021,30 +2119,44 @@ async function cobrar() {
     state.cartOpen = false;
     state.nota_pedido = "";
     state.direccion_delivery = "";
+    
+    const datosVenta = {
+      ...payload,
+      ...(ventaApi || {}),
+      cliente_nombre: payload.cliente_nombre || payload.cliente || (ventaApi && ventaApi.cliente_nombre) || ""
+    };
+
     state.postCobro = normalizarVentaParaTicket(ventaApi || payload, {
-      offline,
-      cajero: state.user?.username,
-    });
-    if (!offline) toast("Venta registrada");
+  offline,
+  cajero: state.user?.username,
+});
 
-    const okPrint = imprimirTicketYCocina(state.postCobro, ventanasPrint);
-    if (!okPrint) {
-      toast("Permite ventanas emergentes para imprimir ticket y cocina", true);
-    }
+// LÍNEA ÚNICA Y SEGURA: inyecta el cliente directamente si no venía en la respuesta
+if (state.postCobro) {
+  state.postCobro.cliente_nombre = payload.cliente_nombre || payload.cliente || state.cliente_nombre || "";
+}
 
-    if (state.online && !offline) {
-      try {
-        await loadProductos();
-      } catch {
-        /* ignore */
-      }
-    }
-    render();
+if (!offline) toast("Venta registrada");
+
+const okPrint = imprimirTicketYCocina(state.postCobro, ventanasPrint);
+if (!okPrint) {
+  toast("Permite ventanas emergentes para imprimir ticket y cocina", true);
+}
+
+if (state.online && !offline) {
+  try {
+    await loadProductos();
+  } catch {
+    /* ignore */
+  }
+}
+render();
   } catch (e) {
     cerrarVentanasImpresion(ventanasPrint);
     toast(e.message || "No se pudo cobrar", true);
   }
 }
+
 
 function imprimirReporteDiario(r) {
   const rows = (r.por_producto || [])
