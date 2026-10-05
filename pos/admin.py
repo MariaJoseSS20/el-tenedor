@@ -50,6 +50,7 @@ class ZonaDeliveryAdmin(admin.ModelAdmin):
 class HorarioPedidosWebAdmin(admin.ModelAdmin):
     list_display = (
         "habilitado",
+        "turno1_activo",
         "turno1_inicio",
         "turno1_fin",
         "turno2_activo",
@@ -73,7 +74,7 @@ class HorarioPedidosWebAdmin(admin.ModelAdmin):
                 )
             },
         ),
-        ("Turno 1", {"fields": ("turno1_inicio", "turno1_fin")}),
+        ("Turno 1", {"fields": ("turno1_activo", "turno1_inicio", "turno1_fin")}),
         ("Turno 2", {"fields": ("turno2_activo", "turno2_inicio", "turno2_fin")}),
         ("Textos", {"fields": ("texto_horario", "mensaje_cerrado")}),
         ("Meta", {"fields": ("actualizado_en",)}),

@@ -266,6 +266,7 @@ class HorarioPedidosWeb(models.Model):
     viernes = models.BooleanField(default=True)
     sabado = models.BooleanField(default=True)
     domingo = models.BooleanField(default=False)
+    turno1_activo = models.BooleanField(default=True)
     turno1_inicio = models.TimeField(default=time(12, 0))
     turno1_fin = models.TimeField(default=time(15, 45))
     turno2_activo = models.BooleanField(default=True)
@@ -293,7 +294,11 @@ class HorarioPedidosWeb(models.Model):
         return "Horario de pedidos web"
 
     def clean(self):
-        if self.turno1_inicio >= self.turno1_fin:
+        if not self.turno1_activo and not self.turno2_activo:
+            raise ValidationError(
+                "Activa al menos un turno (1 o 2) para recibir pedidos."
+            )
+        if self.turno1_activo and self.turno1_inicio >= self.turno1_fin:
             raise ValidationError(
                 {"turno1_fin": "La hora de fin del turno 1 debe ser posterior al inicio."}
             )
@@ -332,7 +337,9 @@ class HorarioPedidosWeb(models.Model):
         def a_mins(t):
             return t.hour * 60 + t.minute
 
-        ventanas = [(a_mins(self.turno1_inicio), a_mins(self.turno1_fin))]
+        ventanas = []
+        if self.turno1_activo:
+            ventanas.append((a_mins(self.turno1_inicio), a_mins(self.turno1_fin)))
         if self.turno2_activo:
             ventanas.append((a_mins(self.turno2_inicio), a_mins(self.turno2_fin)))
         return ventanas

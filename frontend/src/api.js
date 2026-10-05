@@ -69,9 +69,18 @@ async function request(path, options = {}) {
       (data && typeof data === "object" && JSON.stringify(data) !== "null"
         ? JSON.stringify(data)
         : null) ||
+      (typeof data === "string" ? data : null) ||
       text ||
       res.statusText ||
       `Error HTTP ${res.status}`;
+    if (typeof detail === "string" && /<!DOCTYPE html>|<html[\s>]/i.test(detail)) {
+      const title = detail.match(/<title>([^<]+)<\/title>/i)?.[1]?.trim();
+      const pre = detail.match(/<pre class="exception_value">([^<]+)<\/pre>/i)?.[1]?.trim();
+      detail =
+        pre ||
+        title ||
+        `Error del servidor (HTTP ${res.status}). Revisa migraciones o reinicia la API.`;
+    }
     if (detail === "null" || detail === "{}" || detail === "[]") {
       detail = `No se pudo conectar con el servidor (HTTP ${res.status}). ¿Está corriendo la API?`;
     }

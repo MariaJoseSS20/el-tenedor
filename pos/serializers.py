@@ -415,6 +415,7 @@ class HorarioPedidosWebSerializer(serializers.ModelSerializer):
             "viernes",
             "sabado",
             "domingo",
+            "turno1_activo",
             "turno1_inicio",
             "turno1_fin",
             "turno2_activo",
@@ -436,12 +437,21 @@ class HorarioPedidosWebSerializer(serializers.ModelSerializer):
                 return getattr(instance, name)
             return default
 
-        t1i, t1f = val("turno1_inicio"), val("turno1_fin")
-        if t1i and t1f and t1i >= t1f:
+        t1_on = val("turno1_activo", True)
+        t2_on = val("turno2_activo", True)
+        if not t1_on and not t2_on:
             raise serializers.ValidationError(
-                {"turno1_fin": "La hora de fin del turno 1 debe ser posterior al inicio."}
+                "Activa al menos un turno (1 o 2) para recibir pedidos."
             )
-        if val("turno2_activo", True):
+        if t1_on:
+            t1i, t1f = val("turno1_inicio"), val("turno1_fin")
+            if t1i and t1f and t1i >= t1f:
+                raise serializers.ValidationError(
+                    {
+                        "turno1_fin": "La hora de fin del turno 1 debe ser posterior al inicio."
+                    }
+                )
+        if t2_on:
             t2i, t2f = val("turno2_inicio"), val("turno2_fin")
             if t2i and t2f and t2i >= t2f:
                 raise serializers.ValidationError(

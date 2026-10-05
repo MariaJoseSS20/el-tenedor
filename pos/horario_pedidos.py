@@ -92,6 +92,7 @@ def defaults_modelo():
         "viernes": True,
         "sabado": True,
         "domingo": False,
+        "turno1_activo": True,
         "turno1_inicio": time(12, 0),
         "turno1_fin": time(15, 45),
         "turno2_activo": True,

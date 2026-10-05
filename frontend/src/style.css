@@ -128,6 +128,15 @@ select {
   color: var(--muted);
 }
 
+.field-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .field input,
 .field select {
   width: 100%;
@@ -1366,6 +1375,57 @@ select {
   opacity: 0.55;
 }
 
+.carta-estado-cell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.carta-estado-mark {
+  font-size: 1.15rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.carta-estado-mark.is-on {
+  color: var(--navy);
+}
+
+.carta-estado-mark.is-off {
+  color: rgba(26, 26, 75, 0.35);
+}
+
+.prod-visible-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 11px 12px;
+  border: 2px solid var(--navy);
+  border-radius: 10px;
+  background: var(--white);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.prod-visible-box input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--navy);
+  cursor: pointer;
+}
+
+.prod-visible-box span {
+  line-height: 1.2;
+}
+
 .toast {
   position: fixed;
   right: 18px;
@@ -2343,9 +2403,58 @@ select {
 }
 
 .horario-dias {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
+}
+
+.horario-dia-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.horario-dia {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 4px;
+  border: 2px solid var(--navy);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--navy);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.horario-dia.is-on {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--white);
+}
+
+.horario-dia:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.horario-dia:not(:disabled):hover {
+  box-shadow: 0 0 0 2px rgba(26, 26, 75, 0.12);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .check-row {
@@ -2356,25 +2465,10 @@ select {
   cursor: pointer;
 }
 
-.check-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border: 2px solid var(--navy);
-  border-radius: 999px;
-  font-weight: 700;
-  cursor: pointer;
-  background: #fff;
-}
-
-.check-chip:has(input:checked) {
-  background: var(--navy);
-  color: #fff;
-}
-
-.check-chip input {
-  accent-color: var(--mint, #2ecc71);
+@media (max-width: 640px) {
+  .horario-dias {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .horario-turnos {

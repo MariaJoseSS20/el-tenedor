@@ -2336,6 +2336,7 @@ function emptyHorarioForm() {
     viernes: true,
     sabado: true,
     domingo: false,
+    turno1_activo: true,
     turno1_inicio: "12:00",
     turno1_fin: "15:45",
     turno2_activo: true,
@@ -2404,27 +2405,40 @@ function renderHorario() {
           <span>Recibir pedidos online</span>
         </label>
         <p class="tabla-hint">Días abiertos</p>
-        <div class="horario-dias">
+        <div class="horario-dias" role="group" aria-label="Días abiertos">
           ${dias
             .map(
               ([key, label]) => `
-            <label class="check-chip">
-              <input type="checkbox" name="${key}" ${f[key] ? "checked" : ""} ${dis} />
-              <span>${label}</span>
-            </label>`
+            <div class="horario-dia-wrap">
+              <button
+                type="button"
+                class="horario-dia ${f[key] ? "is-on" : ""}"
+                data-dia="${key}"
+                aria-pressed="${f[key] ? "true" : "false"}"
+                ${dis}
+              >${label}</button>
+              <input type="checkbox" name="${key}" class="sr-only" tabindex="-1" ${
+                f[key] ? "checked" : ""
+              } ${dis} />
+            </div>`
             )
             .join("")}
         </div>
         <div class="horario-turnos">
           <fieldset>
-            <legend>Turno 1</legend>
+            <legend>
+              <label class="check-row" style="margin:0">
+                <input type="checkbox" name="turno1_activo" ${f.turno1_activo !== false ? "checked" : ""} ${dis} />
+                <span>Turno 1</span>
+              </label>
+            </legend>
             <div class="horario-times">
               <label>Desde <input type="time" name="turno1_inicio" value="${escapeHtml(
                 f.turno1_inicio
-              )}" required ${dis} /></label>
+              )}" ${f.turno1_activo !== false && puedeEditar ? "required" : "disabled"} /></label>
               <label>Hasta <input type="time" name="turno1_fin" value="${escapeHtml(
                 f.turno1_fin
-              )}" required ${dis} /></label>
+              )}" ${f.turno1_activo !== false && puedeEditar ? "required" : "disabled"} /></label>
             </div>
           </fieldset>
           <fieldset>
@@ -2755,7 +2769,7 @@ function renderProductoModal() {
                 f.descripcion || ""
               )}</textarea>
             </div>
-            <div class="horario-times">
+            <div class="horario-times" style="margin-bottom:14px">
               <div class="field" style="margin:0">
                 <label for="prod-precio">Precio (CLP)</label>
                 <input id="prod-precio" type="number" min="1" step="1" inputmode="numeric" required value="${escapeHtml(
@@ -2775,11 +2789,15 @@ function renderProductoModal() {
               </div>
             </div>
             <div class="field">
-              <label for="prod-estado">Estado</label>
-              <select id="prod-estado">
-                <option value="activo" ${f.estado === "activo" ? "selected" : ""}>Activo (visible en carta)</option>
-                <option value="inactivo" ${f.estado === "inactivo" ? "selected" : ""}>Inactivo (oculto)</option>
-              </select>
+              <span class="field-label">Visibilidad</span>
+              <label class="prod-visible-box" for="prod-visible">
+                <input
+                  id="prod-visible"
+                  type="checkbox"
+                  ${f.estado !== "inactivo" ? "checked" : ""}
+                />
+                <span>Visible en carta</span>
+              </label>
             </div>
           </div>
           <footer class="pedido-modal-foot row-actions" style="margin:0">
@@ -2821,7 +2839,15 @@ function renderCartaAdmin() {
         <td>${escapeHtml(p.nombre)}</td>
         <td>${escapeHtml(labelCategoria(p.categoria))}</td>
         <td>${money(p.precio)}</td>
-        <td>${p.estado === "activo" ? "Activo" : "Inactivo"}</td>
+        <td class="carta-estado-cell" title="${
+          p.estado === "activo" ? "Visible" : "Oculto"
+        }">
+          <span class="carta-estado-mark ${
+            p.estado === "activo" ? "is-on" : "is-off"
+          }" aria-label="${p.estado === "activo" ? "Visible" : "Oculto"}">${
+            p.estado === "activo" ? "✓" : "×"
+          }</span>
+        </td>
         <td class="zona-actions">
           <div class="kebab">
             <button class="kebab-btn" type="button" data-prod-menu aria-label="Opciones de ${escapeHtml(
@@ -2833,11 +2859,6 @@ function renderCartaAdmin() {
               <button type="button" role="menuitem" data-editar-prod="${p.id}">
                 Editar
               </button>
-              ${
-                p.estado === "activo"
-                  ? `<button type="button" role="menuitem" class="is-danger" data-desactivar-prod="${p.id}">Desactivar</button>`
-                  : `<button type="button" role="menuitem" data-activar-prod="${p.id}">Activar</button>`
-              }
             </div>
           </div>
         </td>
@@ -2871,7 +2892,7 @@ function renderCartaAdmin() {
       </div>
       <div class="table-wrap">
         <table class="table">
-          <thead><tr><th>Producto</th><th>Categoría</th><th>Precio</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Producto</th><th>Categoría</th><th>Precio</th><th>Visible</th><th></th></tr></thead>
           <tbody>${
             rows ||
             `<tr><td colspan="5" class="muted">No hay productos con ese filtro.</td></tr>`
@@ -3857,19 +3878,36 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     render();
   });
 
-  document.querySelector('#form-horario [name="turno2_activo"]')?.addEventListener(
-    "change",
-    (e) => {
-      if (!state.horarioLoaded) return;
-      const on = e.target.checked;
-      ["turno2_inicio", "turno2_fin"].forEach((name) => {
-        const input = document.querySelector(`#form-horario [name="${name}"]`);
-        if (!input) return;
-        input.disabled = !on;
-        input.required = on;
-      });
-    }
-  );
+  document.querySelectorAll("#form-horario [data-dia]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.horarioLoaded || btn.disabled) return;
+      const key = btn.dataset.dia;
+      const input = document.querySelector(`#form-horario [name="${key}"]`);
+      if (!input) return;
+      const on = !input.checked;
+      input.checked = on;
+      btn.classList.toggle("is-on", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  });
+
+  const bindTurnoToggle = (activoName, inicioName, finName) => {
+    document.querySelector(`#form-horario [name="${activoName}"]`)?.addEventListener(
+      "change",
+      (e) => {
+        if (!state.horarioLoaded) return;
+        const on = e.target.checked;
+        [inicioName, finName].forEach((name) => {
+          const input = document.querySelector(`#form-horario [name="${name}"]`);
+          if (!input) return;
+          input.disabled = !on;
+          input.required = on;
+        });
+      }
+    );
+  };
+  bindTurnoToggle("turno1_activo", "turno1_inicio", "turno1_fin");
+  bindTurnoToggle("turno2_activo", "turno2_inicio", "turno2_fin");
 
   document.getElementById("form-horario")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -3879,6 +3917,10 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     }
     const form = e.target;
     const bool = (name) => Boolean(form.elements[name]?.checked);
+    if (!bool("turno1_activo") && !bool("turno2_activo")) {
+      toast("Activa al menos un turno (1 o 2).", true);
+      return;
+    }
     const body = {
       habilitado: bool("habilitado"),
       lunes: bool("lunes"),
@@ -3888,8 +3930,9 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
       viernes: bool("viernes"),
       sabado: bool("sabado"),
       domingo: bool("domingo"),
-      turno1_inicio: form.elements.turno1_inicio.value,
-      turno1_fin: form.elements.turno1_fin.value,
+      turno1_activo: bool("turno1_activo"),
+      turno1_inicio: form.elements.turno1_inicio.value || "12:00",
+      turno1_fin: form.elements.turno1_fin.value || "15:45",
       turno2_activo: bool("turno2_activo"),
       turno2_inicio: form.elements.turno2_inicio.value || "18:00",
       turno2_fin: form.elements.turno2_fin.value || "22:45",
@@ -3951,7 +3994,9 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
       descripcion: document.getElementById("prod-descripcion").value.trim(),
       precio: Math.round(Number(document.getElementById("prod-precio").value)),
       categoria: document.getElementById("prod-categoria").value,
-      estado: document.getElementById("prod-estado").value,
+      estado: document.getElementById("prod-visible")?.checked
+        ? "activo"
+        : "inactivo",
     };
     try {
       if (state.productoForm?.id) {
@@ -4003,37 +4048,6 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
       };
       state.productoModalOpen = true;
       render();
-    });
-  });
-
-  document.querySelectorAll("[data-desactivar-prod]").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const id = btn.dataset.desactivarProd;
-      if (!confirm("¿Desactivar este producto? Dejará de verse en la carta.")) return;
-      try {
-        await api.actualizarProducto(id, { estado: "inactivo" });
-        toast("Producto desactivado");
-        state.productos = await api.productos();
-        render();
-      } catch (err) {
-        toast(err.message, true);
-      }
-    });
-  });
-
-  document.querySelectorAll("[data-activar-prod]").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const id = btn.dataset.activarProd;
-      try {
-        await api.actualizarProducto(id, { estado: "activo" });
-        toast("Producto activado");
-        state.productos = await api.productos();
-        render();
-      } catch (err) {
-        toast(err.message, true);
-      }
     });
   });
 
