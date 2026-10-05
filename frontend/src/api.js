@@ -160,4 +160,17 @@ export const api = {
     const q = fecha ? `?fecha=${fecha}` : "";
     return request(`/api/reportes/diario/${q}`);
   },
+  zonasDelivery: () => request("/api/zonas-delivery/"),
+  crearZonaDelivery: (body) =>
+    request("/api/zonas-delivery/", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  actualizarZonaDelivery: (id, body) =>
+    request(`/api/zonas-delivery/${id}/`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  eliminarZonaDelivery: (id) =>
+    request(`/api/zonas-delivery/${id}/`, { method: "DELETE" }),
 };

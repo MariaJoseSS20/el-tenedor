@@ -12,7 +12,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from pos.models import CustomUser, Producto
+from pos.models import CustomUser, Producto, ZonaDelivery
 
 
 # (nombre, descripcion, precio, categoria)
@@ -129,6 +129,7 @@ class Command(BaseCommand):
                 self.style.WARNING(f"Productos fuera de carta desactivados: {desactivados}")
             )
 
+        self._asegurar_zonas_delivery()
         self._asegurar_usuarios_demo(force=options["with_demo_users"])
         self.stdout.write(
             self.style.SUCCESS(
@@ -136,6 +137,22 @@ class Command(BaseCommand):
                 f"Total productos: {Producto.objects.count()}."
             )
         )
+
+    def _asegurar_zonas_delivery(self):
+        zonas = [
+            ("Ciudad", "Dentro de la ciudad", "3500"),
+            ("Rural", "Desde Tres Puentes a Barranco Amarillo", "5000"),
+        ]
+        for nombre, descripcion, precio in zonas:
+            _, created = ZonaDelivery.objects.get_or_create(
+                nombre=nombre,
+                defaults={
+                    "descripcion": descripcion,
+                    "precio": Decimal(precio),
+                },
+            )
+            if created:
+                self.stdout.write(f"Zona de delivery creada: {nombre} ${precio}")
 
     def _asegurar_usuarios_demo(self, force=False):
         if not force and not getattr(settings, "SEED_DEMO_USERS", False):

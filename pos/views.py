@@ -36,8 +36,7 @@ from rest_framework.throttling import AnonRateThrottle
 
 from rest_framework.views import APIView
 
-from .models import CajaDiaria, DetalleVenta, Inventario, Pedido, Producto, Venta
-
+from .models import CajaDiaria, DetalleVenta, Inventario, Pedido, Producto, Venta, ZonaDelivery
 from .permissions import (
 
     EsAdministrador,
@@ -73,7 +72,8 @@ from .serializers import (
     SyncVentasSerializer,
 
     VentaSerializer,
-
+    ZonaDeliveryPublicaSerializer,
+    ZonaDeliverySerializer,
     dia_ya_cerrado,
 
     normalizar_fecha_sync,
@@ -409,6 +409,29 @@ class ProductoViewSet(viewsets.ModelViewSet):
             qs = qs.filter(estado=Producto.Estado.ACTIVO)
 
         return qs
+
+class ZonaDeliveryViewSet(viewsets.ModelViewSet):
+    """
+    Tarifas de delivery que configura el administrador.
+    Cajero: solo consulta. Administrador: crear, editar y eliminar.
+    """
+
+    queryset = ZonaDelivery.objects.all()
+    serializer_class = ZonaDeliverySerializer
+    permission_classes = [LecturaTodosEscrituraAdmin]
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
+
+
+class ZonasDeliveryPublicasView(APIView):
+    """Zonas de delivery para la carta web. El precio lo fija el servidor al cobrar."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        qs = ZonaDelivery.objects.all()
+        return Response(ZonaDeliveryPublicaSerializer(qs, many=True).data)
+
 
 class InventarioViewSet(viewsets.ModelViewSet):
     """
@@ -1350,9 +1373,7 @@ class PedidoViewSet(
     http_method_names = ["get", "post", "head", "options"]
 
     queryset = Pedido.objects.prefetch_related("detalles__producto").select_related(
-
-        "venta"
-
+        "venta", "zona_delivery"
     )
 
     def get_permissions(self):

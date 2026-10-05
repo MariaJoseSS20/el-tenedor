@@ -18,9 +18,8 @@ from .models import (
     Pedido,
     Producto,
     Venta,
+    ZonaDelivery,
 )
-# Cobro fijo de delivery en pedidos web (mismo default del POS).
-COBRO_DELIVERY_WEB = Decimal("1500.00")
 USUARIO_PEDIDOS_WEB = "pedidos-web"
 def validar_entrega_y_cobro(tipo, cobro):
     """Misma regla para venta online y sync offline."""
@@ -146,6 +145,13 @@ class VentaSerializer(serializers.ModelSerializer):
     )
     cajero = CustomUserSerializer(read_only=True)
     cajero_id = serializers.PrimaryKeyRelatedField(source="cajero", read_only=True)
+    zona_delivery = serializers.PrimaryKeyRelatedField(
+        queryset=ZonaDelivery.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+
     class Meta:
         model = Venta
         fields = (
@@ -160,6 +166,7 @@ class VentaSerializer(serializers.ModelSerializer):
             "metodo_pago",
             "tipo_entrega",
             "cobro_delivery",
+            "zona_delivery",
             "estado",
             "notas",
             "detalles",
@@ -195,8 +202,16 @@ class VentaSerializer(serializers.ModelSerializer):
         return value
     def validate(self, attrs):
         tipo = attrs.get("tipo_entrega")
-        cobro = attrs.get("cobro_delivery", Decimal("0.00"))
-        validar_entrega_y_cobro(tipo, cobro)
+        zona = attrs.pop("zona_delivery", None)
+        if tipo == Venta.TipoEntrega.DELIVERY:
+            if zona is None:
+                raise serializers.ValidationError(
+                    {"zona_delivery": "Elige una zona de delivery."}
+                )
+            attrs["cobro_delivery"] = zona.precio
+        else:
+            attrs["cobro_delivery"] = Decimal("0.00")
+        validar_entrega_y_cobro(tipo, attrs["cobro_delivery"])
         if not attrs.get("pagos") and not attrs.get("metodo_pago"):
             raise serializers.ValidationError(
                 {"pagos": "Indique al menos un pago para la venta."}
@@ -385,6 +400,48 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
 class CajaDiariaCierreSerializer(serializers.Serializer):
     """Entrada para calcular y persistir el cierre de una fecha."""
     fecha = serializers.DateField(required=True)
+
+
+class ZonaDeliverySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ZonaDelivery
+        fields = (
+            "id",
+            "nombre",
+            "descripcion",
+            "precio",
+            "creado_en",
+            "actualizado_en",
+        )
+        read_only_fields = ("creado_en", "actualizado_en")
+
+    def validate_nombre(self, value):
+        nombre = (value or "").strip()
+        if len(nombre) < 2:
+            raise serializers.ValidationError("Indique un nombre de al menos 2 caracteres.")
+        qs = ZonaDelivery.objects.filter(nombre__iexact=nombre)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Ya existe una zona con ese nombre.")
+        return nombre
+
+    def validate_descripcion(self, value):
+        return (value or "").strip()
+
+    def validate_precio(self, value):
+        if value is None or value < 0:
+            raise serializers.ValidationError("El precio debe ser 0 o mayor.")
+        return value
+
+
+class ZonaDeliveryPublicaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ZonaDelivery
+        fields = ("id", "nombre", "descripcion", "precio")
+        read_only_fields = fields
+
+
 class CartaProductoSerializer(serializers.ModelSerializer):
     """Catálogo público: solo campos necesarios para armar el pedido."""
     class Meta:
@@ -414,6 +471,9 @@ class PedidoSerializer(serializers.ModelSerializer):
             "direccion",
             "notas",
             "cobro_delivery",
+            "zona_delivery",
+            "zona_nombre",
+            "zona_descripcion",
             "total",
             "estado",
             "buy_order",
@@ -433,6 +493,11 @@ class PedidoCreateSerializer(serializers.Serializer):
         max_length=255, required=False, allow_blank=True, default=""
     )
     notas = serializers.CharField(required=False, allow_blank=True, default="")
+    zona_delivery = serializers.PrimaryKeyRelatedField(
+        queryset=ZonaDelivery.objects.all(),
+        required=False,
+        allow_null=True,
+    )
     detalles = DetallePedidoCreateSerializer(many=True)
     def validate_nombre_cliente(self, value):
         nombre = (value or "").strip()
@@ -455,6 +520,16 @@ class PedidoCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"direccion": "La dirección es obligatoria para delivery."}
             )
+        zona = attrs.get("zona_delivery")
+        if tipo == Venta.TipoEntrega.DELIVERY:
+            if zona is None:
+                raise serializers.ValidationError(
+                    {"zona_delivery": "Elige una zona de delivery."}
+                )
+            attrs["_cobro_delivery"] = zona.precio
+        else:
+            attrs["zona_delivery"] = None
+            attrs["_cobro_delivery"] = Decimal("0.00")
         if tipo == Venta.TipoEntrega.RETIRO:
             attrs["direccion"] = ""
         else:

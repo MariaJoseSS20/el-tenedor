@@ -227,6 +227,29 @@ class Inventario(models.Model):
         return f"{self.nombre} — {self.cantidad} unidades"
 
 
+class ZonaDelivery(models.Model):
+    """Tarifa de delivery que configura el administrador."""
+
+    nombre = models.CharField(max_length=80, unique=True)
+    descripcion = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="Cobertura, por ejemplo: desde Tres Puentes a Barranco Amarillo.",
+    )
+    precio = models.DecimalField(max_digits=10, decimal_places=2)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["nombre"]
+        verbose_name = "zona de delivery"
+        verbose_name_plural = "zonas de delivery"
+
+    def __str__(self):
+        return f"{self.nombre} (${self.precio})"
+
+
 class Venta(models.Model):
 
     """Cabecera de una venta / pedido del local."""
@@ -609,7 +632,25 @@ class Pedido(models.Model):
         default=Decimal("0.00"),
 
     )
-
+    zona_delivery = models.ForeignKey(
+        ZonaDelivery,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pedidos",
+    )
+    zona_nombre = models.CharField(
+        max_length=80,
+        blank=True,
+        default="",
+        help_text="Nombre de la zona al momento del pedido.",
+    )
+    zona_descripcion = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text="Cobertura de la zona al momento del pedido.",
+    )
     total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 
     estado = models.CharField(

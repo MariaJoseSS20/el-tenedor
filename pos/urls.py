@@ -16,6 +16,8 @@ from .views import (
     ReporteDiarioView,
     SyncVentasView,
     VentaViewSet,
+    ZonaDeliveryViewSet,
+    ZonasDeliveryPublicasView,
 )
 
 router = DefaultRouter()
@@ -24,10 +26,16 @@ router.register(r"inventario", InventarioViewSet, basename="inventario")
 router.register(r"ventas", VentaViewSet, basename="venta")
 router.register(r"caja-diaria", CajaDiariaViewSet, basename="caja-diaria")
 router.register(r"pedidos", PedidoViewSet, basename="pedido")
+router.register(r"zonas-delivery", ZonaDeliveryViewSet, basename="zona-delivery")
 
 urlpatterns = [
     path("me/", MeView.as_view(), name="me"),
     path("carta/", CartaView.as_view(), name="carta"),
+    path(
+        "zonas-delivery/publicas/",
+        ZonasDeliveryPublicasView.as_view(),
+        name="zonas-delivery-publicas",
+    ),
     # Retorno Webpay antes del router (no debe interpretarse como pk).
     path("pedidos/retorno/", PedidoRetornoView.as_view(), name="pedido-retorno"),
     # Sync offline: recibe un array de ventas guardadas en IndexedDB.

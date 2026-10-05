@@ -13,7 +13,6 @@ import { esTabla } from "./tablas.js";
 
 const rawBase = import.meta.env.VITE_API_URL || "";
 const API_BASE = String(rawBase).replace(/\/$/, "");
-const COBRO_DELIVERY = 1500;
 const PRECIO_PALTA_EXTRA = 1000;
 
 /** Extras que no se listan solos: se agregan al personalizar. */
@@ -55,6 +54,8 @@ const state = {
   nombre: "",
   telefono: "",
   tipo_entrega: "retiro",
+  zonas: [],
+  zonaId: null,
   direccion: "",
   nota_pedido: "",
   fieldErrors: {},
@@ -106,8 +107,23 @@ function cartSubtotal() {
   return state.cart.reduce((a, l) => a + Number(l.precio) * Number(l.cantidad), 0);
 }
 
+function zonasActivas() {
+  return state.zonas || [];
+}
+
+function zonaSeleccionada() {
+  return zonasActivas().find((z) => String(z.id) === String(state.zonaId)) || null;
+}
+
+function aplicarZona(id) {
+  const zona = zonasActivas().find((z) => String(z.id) === String(id));
+  state.zonaId = zona ? zona.id : null;
+  return zona;
+}
+
 function cartDelivery() {
-  return state.tipo_entrega === "delivery" ? COBRO_DELIVERY : 0;
+  if (state.tipo_entrega !== "delivery") return 0;
+  return Number(zonaSeleccionada()?.precio) || 0;
 }
 
 function cartTotal() {
@@ -264,6 +280,11 @@ function validarCheckout() {
   if (state.tipo_entrega === "delivery" && !state.direccion.trim()) {
     errors.direccion = "Indica la dirección";
   }
+  if (state.tipo_entrega === "delivery" && !zonaSeleccionada()) {
+    errors.zona = zonasActivas().length
+      ? "Elige la zona de delivery"
+      : "Delivery no está disponible ahora";
+  }
   if (!state.cart.length) errors.cart = "Agrega al menos un producto";
   state.fieldErrors = errors;
   return Object.keys(errors).length === 0;
@@ -281,6 +302,35 @@ async function pagar() {
     return;
   }
 
+  if (state.tipo_entrega === "delivery") {
+    const precioVisto = cartDelivery();
+    try {
+      const zonas = await publicGet("/api/zonas-delivery/publicas/");
+      state.zonas = Array.isArray(zonas) ? zonas : [];
+    } catch (e) {
+      showToast(e.message || "No se pudieron cargar las zonas de delivery", true);
+      return;
+    }
+    const vigente = state.zonas.find((z) => String(z.id) === String(state.zonaId));
+    if (!vigente) {
+      state.zonaId = null;
+      state.cartOpen = true;
+      render();
+      showToast("Esa zona ya no está. Elige otra.", true);
+      return;
+    }
+    aplicarZona(vigente.id);
+    if ((Number(vigente.precio) || 0) !== precioVisto) {
+      state.cartOpen = true;
+      render();
+      showToast(
+        `El delivery ahora es ${money(vigente.precio)}. Revisa el total y paga de nuevo.`,
+        true
+      );
+      return;
+    }
+  }
+
   state.paying = true;
   render();
   try {
@@ -289,6 +339,7 @@ async function pagar() {
       telefono: state.telefono.trim(),
       tipo_entrega: state.tipo_entrega,
       direccion: state.tipo_entrega === "delivery" ? state.direccion.trim() : "",
+      zona_delivery: state.tipo_entrega === "delivery" ? zonaSeleccionada()?.id : null,
       notas: state.nota_pedido.trim(),
       detalles: buildDetallesPayload(),
     });
@@ -489,7 +540,7 @@ function renderCheckout() {
           Retiro
         </button>
         <button type="button" class="${state.tipo_entrega === "delivery" ? "is-on" : ""}" data-entrega="delivery">
-          Delivery · ${money(COBRO_DELIVERY)}
+          Delivery
         </button>
       </div>
       <div class="${fieldClass("nombre")}">
@@ -504,7 +555,26 @@ function renderCheckout() {
       </div>
       ${
         state.tipo_entrega === "delivery"
-          ? `<div class="${fieldClass("direccion")}">
+          ? `<div class="${fieldClass("zona")}">
+              <span class="pedir-label">Zona</span>
+              ${
+                zonasActivas().length
+                  ? `<div class="pedir-zonas">
+                      ${zonasActivas()
+                        .map(
+                          (z) => `
+                        <button type="button" class="pedir-zona ${String(state.zonaId) === String(z.id) ? "is-on" : ""}" data-zona="${z.id}">
+                          <strong><span>${escapeHtml(z.nombre)}</span><span>${money(z.precio)}</span></strong>
+                          ${z.descripcion ? `<small>${escapeHtml(z.descripcion)}</small>` : ""}
+                        </button>`
+                        )
+                        .join("")}
+                    </div>`
+                  : `<small>No hay zonas de delivery activas.</small>`
+              }
+              ${err.zona ? `<small>${escapeHtml(err.zona)}</small>` : ""}
+            </div>
+            <div class="${fieldClass("direccion")}">
               <label for="direccion">Dirección</label>
               <input id="direccion" value="${escapeHtml(state.direccion)}" autocomplete="street-address" placeholder="Calle, número, depto…" />
               ${err.direccion ? `<small>${escapeHtml(err.direccion)}</small>` : ""}
@@ -542,7 +612,7 @@ function renderCartDrawer() {
                 <div><span>Subtotal</span><span>${money(cartSubtotal())}</span></div>
                 ${
                   state.tipo_entrega === "delivery"
-                    ? `<div><span>Delivery</span><span>${money(cartDelivery())}</span></div>`
+                    ? `<div><span>Delivery${zonaSeleccionada() ? ` · ${escapeHtml(zonaSeleccionada().nombre)}` : ""}</span><span>${money(cartDelivery())}</span></div>`
                     : ""
                 }
                 <div class="is-total"><span>Total</span><strong>${money(cartTotal())}</strong></div>
@@ -866,6 +936,21 @@ function bind() {
       syncFormFromDom();
       state.tipo_entrega = btn.dataset.entrega;
       delete state.fieldErrors.direccion;
+      delete state.fieldErrors.zona;
+      if (state.tipo_entrega === "delivery" && !zonaSeleccionada()) {
+        const primera = zonasActivas()[0];
+        if (primera) aplicarZona(primera.id);
+      }
+      if (state.tipo_entrega !== "delivery") state.zonaId = null;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-zona]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      syncFormFromDom();
+      aplicarZona(btn.dataset.zona);
+      delete state.fieldErrors.zona;
       render();
     });
   });
@@ -1095,7 +1180,12 @@ async function loadCarta() {
   state.error = null;
   render();
   try {
-    state.productos = await publicGet("/api/carta/");
+    const [productos, zonas] = await Promise.all([
+      publicGet("/api/carta/"),
+      publicGet("/api/zonas-delivery/publicas/").catch(() => []),
+    ]);
+    state.productos = productos;
+    state.zonas = Array.isArray(zonas) ? zonas : [];
     state.loading = false;
     if (!CATEGORIAS.some(([id]) => state.productos.some((p) => p.categoria === id))) {
       state.categoria = "todas";

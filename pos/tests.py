@@ -12,7 +12,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from pos.models import CajaDiaria, CustomUser, Inventario, Producto, Venta
+from pos.models import CajaDiaria, CustomUser, Inventario, Producto, Venta, ZonaDelivery
 
 
 class BaseAPITest(TestCase):
@@ -369,12 +369,14 @@ class CajaDiariaTests(BaseAPITest):
             },
             format="json",
         )
+        ciudad = ZonaDelivery.objects.get(nombre="Ciudad")
         self.client.post(
             "/api/ventas/",
             {
                 "metodo_pago": "tarjeta",
                 "tipo_entrega": "delivery",
-                "cobro_delivery": "1500",
+                "cobro_delivery": "1",
+                "zona_delivery": ciudad.id,
                 "detalles": [{"producto": self.producto.id, "cantidad": 1}],
             },
             format="json",
@@ -385,7 +387,7 @@ class CajaDiariaTests(BaseAPITest):
         r = self.client.post("/api/caja-diaria/", {"fecha": fecha}, format="json")
         self.assertEqual(r.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Decimal(r.data["total_efectivo"]), Decimal("5000.00"))
-        self.assertEqual(Decimal(r.data["total_tarjetas"]), Decimal("6500.00"))
+        self.assertEqual(Decimal(r.data["total_tarjetas"]), Decimal("8500.00"))
         self.assertTrue(CajaDiaria.objects.filter(fecha=fecha).exists())
 
     def test_venta_rechazada_si_caja_del_dia_cerrada(self):
@@ -567,14 +569,41 @@ class PedidosWebpayTests(BaseAPITest):
         )
         self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_delivery_suma_cobro_fijo(self):
+    def test_delivery_sin_zona_rechazado(self):
         r = self.client.post(
             "/api/pedidos/",
             self._payload(tipo_entrega="delivery", direccion="Calle 1"),
             format="json",
         )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_delivery_usa_precio_de_la_zona(self):
+        ciudad = ZonaDelivery.objects.get(nombre="Ciudad")
+        rural = ZonaDelivery.objects.get(nombre="Rural")
+        r = self.client.post(
+            "/api/pedidos/",
+            self._payload(
+                tipo_entrega="delivery",
+                direccion="Calle 1",
+                zona_delivery=ciudad.id,
+                cobro_delivery="1",
+            ),
+            format="json",
+        )
         self.assertEqual(r.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(Decimal(r.data["total"]), Decimal("6500.00"))
+        self.assertEqual(Decimal(r.data["total"]), Decimal("8500.00"))
+
+        r2 = self.client.post(
+            "/api/pedidos/",
+            self._payload(
+                tipo_entrega="delivery",
+                direccion="Camino rural 9",
+                zona_delivery=rural.id,
+            ),
+            format="json",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(r2.data["total"]), Decimal("10000.00"))
 
     def test_pago_autorizado_crea_venta_y_aparece_en_bandeja(self):
         created = self.client.post("/api/pedidos/", self._payload(), format="json").data
@@ -724,4 +753,73 @@ class PedidosWebpayTests(BaseAPITest):
         preview = self.client.get("/api/caja-diaria/preview/")
         self.assertEqual(preview.data["cantidad_ventas"], 0)
         self.assertEqual(Decimal(preview.data["total_webpay"]), Decimal("0.00"))
+
+
+class ZonaDeliveryTests(BaseAPITest):
+    def test_anonimo_ve_zonas_configuradas(self):
+        r = self.client.get("/api/zonas-delivery/publicas/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        nombres = [z["nombre"] for z in r.data]
+        self.assertEqual(nombres, ["Ciudad", "Rural"])
+        ciudad = next(z for z in r.data if z["nombre"] == "Ciudad")
+        self.assertEqual(Decimal(ciudad["precio"]), Decimal("3500.00"))
+
+    def test_cajero_no_crea_ni_edita(self):
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/zonas-delivery/",
+            {"nombre": "Nueva", "precio": "1000"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_crea_edita_y_elimina(self):
+        self.auth(self.admin)
+        r = self.client.post(
+            "/api/zonas-delivery/",
+            {
+                "nombre": "Norte",
+                "descripcion": "Hasta el río",
+                "precio": "4200",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        zona_id = r.data["id"]
+
+        edit = self.client.patch(
+            f"/api/zonas-delivery/{zona_id}/",
+            {"precio": "4500"},
+            format="json",
+        )
+        self.assertEqual(edit.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(edit.data["precio"]), Decimal("4500.00"))
+
+        deleted = self.client.delete(f"/api/zonas-delivery/{zona_id}/")
+        self.assertEqual(deleted.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ZonaDelivery.objects.filter(pk=zona_id).exists())
+
+    def test_eliminar_zona_usada_conserva_el_pedido(self):
+        from pos.models import Pedido
+
+        zona = ZonaDelivery.objects.get(nombre="Ciudad")
+        pedido = Pedido.objects.create(
+            nombre_cliente="Ana",
+            telefono="+56912345678",
+            tipo_entrega=Venta.TipoEntrega.DELIVERY,
+            direccion="Calle 1",
+            cobro_delivery=zona.precio,
+            total=zona.precio,
+            buy_order="Pzonatest00000000000001",
+            zona_delivery=zona,
+            zona_nombre=zona.nombre,
+            zona_descripcion=zona.descripcion,
+        )
+        self.auth(self.admin)
+        r = self.client.delete(f"/api/zonas-delivery/{zona.id}/")
+        self.assertEqual(r.status_code, status.HTTP_204_NO_CONTENT)
+        pedido.refresh_from_db()
+        self.assertIsNone(pedido.zona_delivery_id)
+        self.assertEqual(pedido.zona_nombre, "Ciudad")
+        self.assertEqual(pedido.cobro_delivery, Decimal("3500.00"))
 

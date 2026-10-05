@@ -12,7 +12,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import CustomUser, DetallePedido, DetalleVenta, Pedido, Venta
-from .serializers import COBRO_DELIVERY_WEB, USUARIO_PEDIDOS_WEB, dia_ya_cerrado
+from .serializers import USUARIO_PEDIDOS_WEB, dia_ya_cerrado
 from . import webpay
 
 
@@ -42,6 +42,9 @@ def notas_pedido_para_venta(pedido: Pedido) -> str:
         f"Cliente: {pedido.nombre_cliente}",
         f"Tel: {pedido.telefono}",
     ]
+    if pedido.tipo_entrega == Venta.TipoEntrega.DELIVERY and pedido.zona_nombre:
+        cobertura = f" ({pedido.zona_descripcion})" if pedido.zona_descripcion else ""
+        parts.append(f"Zona: {pedido.zona_nombre}{cobertura}")
     if pedido.tipo_entrega == Venta.TipoEntrega.DELIVERY and pedido.direccion:
         parts.append(f"Dirección: {pedido.direccion}")
     if pedido.notas:
@@ -54,11 +57,8 @@ def notas_pedido_para_venta(pedido: Pedido) -> str:
 def crear_pedido_desde_payload(validated_data: dict) -> Pedido:
     productos = validated_data.pop("_productos")
     detalles_data = validated_data.pop("detalles")
-    cobro = (
-        COBRO_DELIVERY_WEB
-        if validated_data["tipo_entrega"] == Venta.TipoEntrega.DELIVERY
-        else Decimal("0.00")
-    )
+    cobro = validated_data.pop("_cobro_delivery", Decimal("0.00"))
+    zona = validated_data.pop("zona_delivery", None)
 
     pedido = Pedido.objects.create(
         nombre_cliente=validated_data["nombre_cliente"],
@@ -67,6 +67,9 @@ def crear_pedido_desde_payload(validated_data: dict) -> Pedido:
         direccion=validated_data.get("direccion") or "",
         notas=validated_data.get("notas") or "",
         cobro_delivery=cobro,
+        zona_delivery=zona,
+        zona_nombre=zona.nombre if zona is not None else "",
+        zona_descripcion=zona.descripcion if zona is not None else "",
         total=Decimal("0.00"),
         estado=Pedido.Estado.ESPERANDO_PAGO,
         buy_order=generar_buy_order(),

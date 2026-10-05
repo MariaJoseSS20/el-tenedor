@@ -10,6 +10,7 @@ from .models import (
     Pedido,
     Producto,
     Venta,
+    ZonaDelivery,
 )
 
 
@@ -35,6 +36,13 @@ class DetallePedidoInline(admin.TabularInline):
     model = DetallePedido
     extra = 0
     readonly_fields = ("subtotal",)
+
+
+@admin.register(ZonaDelivery)
+class ZonaDeliveryAdmin(admin.ModelAdmin):
+    list_display = ("nombre", "descripcion", "precio")
+    search_fields = ("nombre", "descripcion")
+    list_editable = ("precio",)
 
 
 @admin.register(Producto)

@@ -56,6 +56,13 @@ pago_mixto: {
 tipo_entrega: "retiro",
  
   cobro_delivery: 0,
+  /** Tarifas que define el administrador. */
+  zonas: [],
+  zonasError: "",
+  zona_delivery_id: null,
+  /** Formulario del modal de Delivery. */
+  zonaForm: emptyZonaForm(),
+  zonaModalOpen: false,
   /** Dirección obligatoria si la entrega es delivery. */
   direccion_delivery: "",
   /** Nota general del pedido (cliente / cocina). */
@@ -80,6 +87,32 @@ tipo_entrega: "retiro",
   cliente_nombre:"",
   paga_con: "",
 };
+
+function emptyZonaForm() {
+  return { id: null, nombre: "", descripcion: "", precio: "" };
+}
+
+function zonasActivas() {
+  return state.zonas || [];
+}
+
+function zonaSeleccionada() {
+  return (
+    zonasActivas().find((z) => String(z.id) === String(state.zona_delivery_id)) || null
+  );
+}
+
+function aplicarZona(id) {
+  const zona = zonasActivas().find((z) => String(z.id) === String(id));
+  if (!zona) {
+    state.zona_delivery_id = null;
+    state.cobro_delivery = 0;
+    return null;
+  }
+  state.zona_delivery_id = zona.id;
+  state.cobro_delivery = Number(zona.precio) || 0;
+  return zona;
+}
 
 /** Fecha YYYY-MM-DD en zona del local (Punta Arenas). */
 function fechaLocalHoy() {
@@ -211,6 +244,7 @@ async function bootstrap() {
       state.user = await api.me();
       setCachedUser(state.user);
       await loadProductos();
+      await loadZonas();
       await refreshPending();
       await trySync(false);
       startPedidosPolling();
@@ -224,6 +258,15 @@ async function bootstrap() {
 
 async function loadProductos() {
   state.productos = await api.productos();
+}
+
+async function loadZonas() {
+  try {
+    state.zonas = await api.zonasDelivery();
+    state.zonasError = "";
+  } catch (e) {
+    state.zonasError = e.message || "No se pudieron cargar las zonas de delivery";
+  }
 }
 
 function renderLogin() {
@@ -253,6 +296,7 @@ function renderLogin() {
     try {
       state.user = await login(fd.get("username"), fd.get("password"));
       await loadProductos();
+      await loadZonas();
       await refreshPending();
       await trySync(false);
       startPedidosPolling();
@@ -295,6 +339,7 @@ function shell(content) {
           isAdmin
             ? `
           <button data-view="inventario" class="${state.view === "inventario" ? "active" : ""}">Inventario</button>
+          <button data-view="delivery" class="${state.view === "delivery" ? "active" : ""}">Delivery</button>
           <button data-view="caja" class="${state.view === "caja" ? "active" : ""}">Caja</button>
           <button data-view="reportes" class="${state.view === "reportes" ? "active" : ""}">Reportes</button>
         `
@@ -408,8 +453,19 @@ function renderCartCheckoutFields() {
           </select>
         </div>
         <div class="field ${state.tipo_entrega === "delivery" ? "" : "is-disabled"}">
-          <label>Cobro delivery</label>
-          <input id="cobro_delivery" type="number" min="0" step="100" value="${state.cobro_delivery}" ${state.tipo_entrega === "delivery" ? "" : "disabled"} />
+          <label for="zona_delivery">Zona delivery</label>
+          <select id="zona_delivery" ${state.tipo_entrega === "delivery" ? "" : "disabled"}>
+            ${
+              zonasActivas().length
+                ? zonasActivas()
+                    .map(
+                      (z) =>
+                        `<option value="${z.id}" ${String(state.zona_delivery_id) === String(z.id) ? "selected" : ""}>${escapeHtml(z.nombre)}${z.descripcion ? ` — ${escapeHtml(z.descripcion)}` : ""} · ${money(z.precio)}</option>`
+                    )
+                    .join("")
+                : `<option value="">${state.zonasError ? "No se pudieron cargar" : "Sin zonas configuradas"}</option>`
+            }
+          </select>
         </div>
       </div>
       ${state.metodo_pago === "Efectivo" || state.metodo_pago === "efectivo" ? `
@@ -1114,6 +1170,10 @@ function renderPedidos() {
         <p><strong>${escapeHtml(p.cliente_nombre)}</strong> · ${escapeHtml(p.telefono)}</p>
         <p class="sub">
           ${escapeHtml(p.tipo_entrega)}${
+            p.zona_nombre
+              ? ` · ${escapeHtml(p.zona_nombre)}${Number(p.cobro_delivery) ? ` ${money(p.cobro_delivery)}` : ""}`
+              : ""
+          }${
             p.direccion ? ` · ${escapeHtml(p.direccion)}` : ""
           } · Pagado Webpay
         </p>
@@ -1168,6 +1228,10 @@ function pedidoAVentaNorm(p) {
     `Cliente: ${p.cliente_nombre}`,
     `Tel: ${p.telefono}`,
   ];
+  if (p.tipo_entrega === "delivery" && p.zona_nombre) {
+    const cobertura = p.zona_descripcion ? ` (${p.zona_descripcion})` : "";
+    notaParts.push(`Zona: ${p.zona_nombre}${cobertura}`);
+  }
   if (p.tipo_entrega === "delivery" && p.direccion) {
     notaParts.push(`Dirección: ${p.direccion}`);
   }
@@ -1607,6 +1671,102 @@ function renderReportes() {
   `;
 }
 
+function cerrarZonaModal() {
+  state.zonaModalOpen = false;
+  state.zonaForm = emptyZonaForm();
+}
+
+function renderZonaModal() {
+  if (!state.zonaModalOpen) return "";
+  const f = state.zonaForm || emptyZonaForm();
+  const editando = Boolean(f.id);
+  return `
+    <div class="pedido-overlay zona-overlay" id="zona-overlay" role="dialog" aria-modal="true" aria-labelledby="zona-modal-title">
+      <div class="pedido-modal" style="max-width:440px">
+        <header class="pedido-modal-head">
+          <div>
+            <p class="pedido-kicker">Delivery</p>
+            <h2 id="zona-modal-title">${editando ? "Editar zona" : "Agregar zona"}</h2>
+          </div>
+          <button type="button" class="modal-x" id="btn-cerrar-zona" aria-label="Cerrar">×</button>
+        </header>
+        <form id="form-zona">
+          <div class="pedido-modal-body">
+            <div class="field">
+              <label for="zona-nombre">Nombre</label>
+              <input id="zona-nombre" required maxlength="80" value="${escapeHtml(f.nombre)}" placeholder="Ciudad" />
+            </div>
+            <div class="field">
+              <label for="zona-descripcion">Cobertura</label>
+              <input id="zona-descripcion" maxlength="200" value="${escapeHtml(f.descripcion)}" placeholder="Desde Tres Puentes a Barranco Amarillo" />
+            </div>
+            <div class="field">
+              <label for="zona-precio">Precio</label>
+              <input id="zona-precio" type="number" min="0" step="100" required value="${escapeHtml(String(f.precio ?? ""))}" placeholder="3500" />
+            </div>
+          </div>
+          <footer class="pedido-modal-foot row-actions" style="margin:0">
+            <button class="btn btn-primary" type="submit" style="width:auto">${editando ? "Guardar cambios" : "Agregar"}</button>
+            <button class="btn btn-ghost" type="button" id="btn-cancelar-zona" style="width:auto">Cancelar</button>
+          </footer>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function renderDelivery() {
+  const rows = (state.zonas || [])
+    .map(
+      (z) => `
+      <tr>
+        <td>${escapeHtml(z.nombre)}</td>
+        <td>${escapeHtml(z.descripcion || "—")}</td>
+        <td>${money(z.precio)}</td>
+        <td class="zona-actions">
+          <div class="kebab">
+            <button class="kebab-btn" type="button" data-zona-menu aria-label="Opciones de ${escapeHtml(z.nombre)}" aria-expanded="false" aria-haspopup="menu">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="kebab-menu" role="menu" hidden>
+              <button type="button" role="menuitem" data-editar-zona="${z.id}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z"/></svg>
+                Editar
+              </button>
+              <button type="button" role="menuitem" class="is-danger" data-eliminar-zona="${z.id}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M8 7l1 13h6l1-13"/></svg>
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </td>
+      </tr>`
+    )
+    .join("");
+
+  return `
+    <section class="panel">
+      <h2>Delivery</h2>
+      <p class="sub">Tarifas que se cobran en el POS y en los pedidos web. Ciudad y rural se pueden cambiar cuando quieras.</p>
+      ${
+        state.zonasError
+          ? `<p class="cart-error" role="alert">${escapeHtml(state.zonasError)}</p>`
+          : ""
+      }
+      <div class="row-actions" style="margin-top:0">
+        <button class="btn btn-primary" type="button" id="btn-agregar-zona" style="width:auto">Agregar</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Zona</th><th>Cobertura</th><th>Precio</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="4" class="muted">${state.zonasError ? "No se pudieron mostrar las zonas." : "Todavía no hay zonas. Agrega la primera."}</td></tr>`}</tbody>
+        </table>
+      </div>
+    </section>
+    ${renderZonaModal()}
+  `;
+}
+
 function renderCaja() {
   const p = state.cajaPreview;
   const cierre = state.cajaCerrada;
@@ -1815,6 +1975,7 @@ function render() {
   if (state.view === "pedidos") content = renderPedidos();
   if (state.view === "ventas") content = renderVentas();
   if (state.view === "inventario") content = renderInventario();
+  if (state.view === "delivery") content = renderDelivery();
   if (state.view === "caja") content = renderCaja();
   if (state.view === "reportes") content = renderReportes();
 
@@ -1850,15 +2011,16 @@ function bindShell() {
           state.inventario = await api.inventario();
           state.productos = await api.productos();
         }
+        if (state.view === "delivery") await loadZonas();
         if (state.view === "caja") {
-  state.cajaPreview = await api.cajaPreview();
+          state.cajaPreview = await api.cajaPreview();
 
-  if (state.cajaPreview?.cerrado_en) {
-    state.cajaCerrada = state.cajaPreview;
-  } else {
-    state.cajaCerrada = null;
-  }
-}
+          if (state.cajaPreview?.cerrado_en) {
+            state.cajaCerrada = state.cajaPreview;
+          } else {
+            state.cajaCerrada = null;
+          }
+        }
         if (state.view === "reportes") {
           state.reporte = await api.reporteDiario(state.reporteFecha);
         }
@@ -2305,14 +2467,18 @@ if (resumen) {
     state.tipo_entrega = e.target.value;
     if (state.tipo_entrega === "retiro") {
       state.cobro_delivery = 0;
+      state.zona_delivery_id = null;
       state.direccion_delivery = "";
-    } else if (!state.cobro_delivery) {
-      state.cobro_delivery = 1500;
+    } else if (!zonaSeleccionada()) {
+      const primera = zonasActivas()[0];
+      if (primera) aplicarZona(primera.id);
+    } else {
+      aplicarZona(state.zona_delivery_id);
     }
     render();
   });
-  document.getElementById("cobro_delivery")?.addEventListener("change", (e) => {
-    state.cobro_delivery = Number(e.target.value) || 0;
+  document.getElementById("zona_delivery")?.addEventListener("change", (e) => {
+    aplicarZona(e.target.value);
     render();
   });
 
@@ -2470,56 +2636,123 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     imprimirReporteDiario(state.reporte);
   });
 
- document.getElementById("form-agregar-inv")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  const nombre = document.getElementById("nombre-inv").value.trim();
-  const cantidad = Number(document.getElementById("cantidad-inv").value);
-  const notas = document.getElementById("notas-inv").value.trim();
-
-  if (!nombre) {
-    toast("Ingresa el nombre del empaque", true);
-    return;
-  }
-
-  if (!Number.isInteger(cantidad) || cantidad < 0) {
-    toast("Las unidades deben ser un número entero igual o mayor a 0", true);
-    return;
-  }
-
-  try {
-    await api.agregarInventario({
+  document.getElementById("form-zona")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nombre = document.getElementById("zona-nombre").value.trim();
+    const descripcion = document.getElementById("zona-descripcion").value.trim();
+    const precio = document.getElementById("zona-precio").value;
+    const body = {
       nombre,
-      cantidad,
-      notas,
-    });
+      descripcion,
+      precio,
+    };
+    try {
+      if (state.zonaForm?.id) {
+        await api.actualizarZonaDelivery(state.zonaForm.id, body);
+        toast("Zona actualizada");
+      } else {
+        await api.crearZonaDelivery(body);
+        toast("Zona agregada");
+      }
+      cerrarZonaModal();
+      await loadZonas();
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 
-    state.inventario = await api.inventario();
-    toast("Empaque agregado al inventario");
+  document.getElementById("btn-agregar-zona")?.addEventListener("click", () => {
+    state.zonaForm = emptyZonaForm();
+    state.zonaModalOpen = true;
     render();
-  } catch (err) {
-    toast(err.message, true);
+    document.getElementById("zona-nombre")?.focus();
+  });
+
+  const cerrarModalZona = () => {
+    cerrarZonaModal();
+    render();
+  };
+  document.getElementById("btn-cancelar-zona")?.addEventListener("click", cerrarModalZona);
+  document.getElementById("btn-cerrar-zona")?.addEventListener("click", cerrarModalZona);
+  document.getElementById("zona-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "zona-overlay") cerrarModalZona();
+  });
+
+  if (!window.__zonaMenuOutside) {
+    window.__zonaMenuOutside = true;
+    document.addEventListener("click", () => {
+      document.querySelectorAll(".kebab-menu").forEach((el) => {
+        el.hidden = true;
+      });
+      document.querySelectorAll("[data-zona-menu]").forEach((el) => {
+        el.setAttribute("aria-expanded", "false");
+      });
+    });
   }
-});
 
-document.querySelectorAll("[data-guardar-inv]").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    const id = btn.dataset.guardarInv;
+  document.querySelectorAll("[data-zona-menu]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wrap = btn.closest(".kebab");
+      const menu = wrap?.querySelector(".kebab-menu");
+      const willOpen = menu?.hidden !== false;
+      document.querySelectorAll(".kebab-menu").forEach((el) => {
+        el.hidden = true;
+      });
+      document.querySelectorAll("[data-zona-menu]").forEach((el) => {
+        el.setAttribute("aria-expanded", "false");
+      });
+      if (willOpen && menu) {
+        menu.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
 
-    const nombre = document
-      .getElementById(`nombre-inv-${id}`)
-      .value.trim();
+  document.querySelectorAll("[data-editar-zona]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const zona = state.zonas.find((z) => String(z.id) === String(btn.dataset.editarZona));
+      if (!zona) return;
+      state.zonaForm = {
+        id: zona.id,
+        nombre: zona.nombre || "",
+        descripcion: zona.descripcion || "",
+        precio: Number(zona.precio) || 0,
+      };
+      state.zonaModalOpen = true;
+      render();
+      document.getElementById("zona-nombre")?.focus();
+    });
+  });
 
-    const cantidad = Number(
-      document.getElementById(`cantidad-inv-${id}`).value
-    );
+  document.querySelectorAll("[data-eliminar-zona]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const zona = state.zonas.find((z) => String(z.id) === String(btn.dataset.eliminarZona));
+      if (!confirm(`¿Eliminar la zona ${zona?.nombre || ""}?`)) return;
+      try {
+        await api.eliminarZonaDelivery(btn.dataset.eliminarZona);
+        if (String(state.zonaForm?.id) === String(btn.dataset.eliminarZona)) {
+          cerrarZonaModal();
+        }
+        await loadZonas();
+        toast("Zona eliminada");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
 
-    const notas = document
-      .getElementById(`notas-inv-${id}`)
-      .value.trim();
+  document.getElementById("form-agregar-inv")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const nombre = document.getElementById("nombre-inv").value.trim();
+    const cantidad = Number(document.getElementById("cantidad-inv").value);
+    const notas = document.getElementById("notas-inv").value.trim();
 
     if (!nombre) {
-      toast("El nombre del empaque no puede estar vacío", true);
+      toast("Ingresa el nombre del empaque", true);
       return;
     }
 
@@ -2529,20 +2762,61 @@ document.querySelectorAll("[data-guardar-inv]").forEach((btn) => {
     }
 
     try {
-      await api.patchInventario(id, {
+      await api.agregarInventario({
         nombre,
         cantidad,
         notas,
       });
 
       state.inventario = await api.inventario();
-      toast("Inventario actualizado");
+      toast("Empaque agregado al inventario");
       render();
     } catch (err) {
       toast(err.message, true);
     }
   });
-});
+
+  document.querySelectorAll("[data-guardar-inv]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.guardarInv;
+
+      const nombre = document
+        .getElementById(`nombre-inv-${id}`)
+        .value.trim();
+
+      const cantidad = Number(
+        document.getElementById(`cantidad-inv-${id}`).value
+      );
+
+      const notas = document
+        .getElementById(`notas-inv-${id}`)
+        .value.trim();
+
+      if (!nombre) {
+        toast("El nombre del empaque no puede estar vacío", true);
+        return;
+      }
+
+      if (!Number.isInteger(cantidad) || cantidad < 0) {
+        toast("Las unidades deben ser un número entero igual o mayor a 0", true);
+        return;
+      }
+
+      try {
+        await api.patchInventario(id, {
+          nombre,
+          cantidad,
+          notas,
+        });
+
+        state.inventario = await api.inventario();
+        toast("Inventario actualizado");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
 
   document.querySelectorAll("[data-quitar-inv]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -2599,6 +2873,34 @@ async function cobrar() {
   }
 
   if (state.tipo_entrega === "delivery") {
+    if (state.online) {
+      await loadZonas();
+      if (state.zonasError) {
+        toast(state.zonasError, true);
+        return;
+      }
+      const vista = zonaSeleccionada();
+      const precioVisto = Number(state.cobro_delivery) || 0;
+      const vigente = zonasActivas().find((z) => String(z.id) === String(vista?.id));
+      if (!vigente) {
+        state.zona_delivery_id = null;
+        state.cobro_delivery = 0;
+        toast("Esa zona ya no está. Elige otra.", true);
+        render();
+        return;
+      }
+      aplicarZona(vigente.id);
+      if ((Number(vigente.precio) || 0) !== precioVisto) {
+        toast(`El delivery ahora es ${money(vigente.precio)}. Revisa el total y cobra de nuevo.`, true);
+        render();
+        return;
+      }
+    }
+    const zona = zonaSeleccionada();
+    if (!zona) {
+      toast("Elige una zona de delivery.", true);
+      return;
+    }
     const dir = (state.direccion_delivery || "").trim();
     if (!dir) {
       toast("Indica la dirección de delivery", true);
@@ -2611,6 +2913,13 @@ async function cobrar() {
   
 
   const notaParts = [];
+  if (state.tipo_entrega === "delivery") {
+    const zona = zonaSeleccionada();
+    if (zona) {
+      const cobertura = zona.descripcion ? ` (${zona.descripcion})` : "";
+      notaParts.push(`Zona: ${zona.nombre}${cobertura}`);
+    }
+  }
   if (state.tipo_entrega === "delivery" && state.direccion_delivery.trim()) {
     notaParts.push(`Dirección: ${state.direccion_delivery.trim()}`);
   }
@@ -2682,6 +2991,7 @@ if (state.metodo_pago === "mixto") {
     tipo_entrega: state.tipo_entrega,
     cliente_nombre: state.cliente_nombre || document.getElementById('cliente_nombre')?.value || "",
     cobro_delivery: state.tipo_entrega === "delivery" ? String(state.cobro_delivery || 0) : "0",
+    zona_delivery: state.tipo_entrega === "delivery" ? zonaSeleccionada()?.id ?? null : null,
     detalles: state.cart.flatMap((l) => {
       let notas = "";
       if (l.rolls?.length) {
