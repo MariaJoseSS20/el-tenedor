@@ -117,6 +117,13 @@ export async function login(username, password) {
 export const api = {
   me: () => request("/api/me/"),
   productos: () => request("/api/productos/"),
+  crearProducto: (body) =>
+    request("/api/productos/", { method: "POST", body: JSON.stringify(body) }),
+  actualizarProducto: (id, body) =>
+    request(`/api/productos/${id}/`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   inventario: () => request("/api/inventario/"),
   agregarInventario: (body) =>
     request("/api/inventario/", {
@@ -173,4 +180,10 @@ export const api = {
     }),
   eliminarZonaDelivery: (id) =>
     request(`/api/zonas-delivery/${id}/`, { method: "DELETE" }),
+  horarioPedidosConfig: () => request("/api/horario-pedidos/config/"),
+  guardarHorarioPedidos: (body) =>
+    request("/api/horario-pedidos/config/", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
 };

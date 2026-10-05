@@ -1,13 +1,29 @@
 /**
- * Personalización de shawarmas (ingredientes + salsas).
+ * Personalización de shawarmas (masa + ingredientes + salsas).
  * 1 salsa incluida por unidad; cada salsa extra = $800.
  */
 
 export const SALSAS_SHAWARMA = ["Ajo", "Merkén", "Cilantro", "Ciboulette"];
 export const PRECIO_SALSA_EXTRA = 800;
 
+/** Elección de masa (mismo precio). */
+export const MASAS_SHAWARMA = [
+  { id: "tradicional", label: "Masa Tradicional" },
+  {
+    id: "multigrano",
+    label: "Masa Multigrano",
+    detalle: "con maravilla, chía, linaza y avena",
+  },
+];
+export const MASA_DEFAULT = "tradicional";
+
 /** Shawarmas cuyo relleno incluye elección Carne o Pollo. */
 const PROTEINA_OPCIONES = ["Carne", "Pollo"];
+
+export function labelMasaShawarma(masaId) {
+  const m = MASAS_SHAWARMA.find((x) => x.id === masaId);
+  return m?.label || MASAS_SHAWARMA[0].label;
+}
 
 export function esShawarma(producto) {
   return producto?.categoria === "shawarmas";
@@ -48,13 +64,14 @@ export function precioUnitarioShawarma(precioBase, salsasSeleccionadas) {
   return base + extrasSalsaCount(salsasSeleccionadas) * PRECIO_SALSA_EXTRA;
 }
 
-export function labelShawarmaLinea({ ingredientes, proteina, salsas, extras }) {
+export function labelShawarmaLinea({ ingredientes, proteina, salsas, extras, masa }) {
   const parts = [];
   if (proteina) parts.push(proteina);
   parts.push(...(ingredientes || []));
   const ings = parts.join(" - ");
+  const masaTxt = labelMasaShawarma(masa || MASA_DEFAULT);
   const salsaTxt = (salsas || []).join(", ") || "sin salsa";
   const extraTxt =
     extras > 0 ? ` (+${extras} salsa${extras > 1 ? "s" : ""} extra)` : "";
-  return `${ings} · Salsa: ${salsaTxt}${extraTxt}`;
+  return `${masaTxt} · ${ings} · Salsa: ${salsaTxt}${extraTxt}`;
 }

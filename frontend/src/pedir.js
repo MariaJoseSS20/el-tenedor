@@ -1,6 +1,8 @@
 import "./style.css";
 import { escapeHtml } from "./dom.js";
 import {
+  MASAS_SHAWARMA,
+  MASA_DEFAULT,
   SALSAS_SHAWARMA,
   PRECIO_SALSA_EXTRA,
   esShawarma,
@@ -10,13 +12,53 @@ import {
   precioUnitarioShawarma,
 } from "./shawarmas.js";
 import { esTabla } from "./tablas.js";
+import {
+  ACOMP_QUESO,
+  PRECIO_SALSA_EXTRA_ROLL,
+  RELLENOS_ROLL,
+  SALSAS_ROLL,
+  VEGETALES_ROLL,
+  emptySalsasRollState,
+  emptyToppingsState,
+  envolturasDisponibles,
+  esProductoOcultoRoll,
+  labelRollArmado,
+  precioUnitarioRoll,
+  rollConfigCompleta,
+  salsasSeleccionadasRoll,
+  tarjetaArmaTuRoll,
+  toppingsDisponibles,
+  toppingsSeleccionados,
+} from "./rolls.js";
+import {
+  ESPOLVOREADOS_GOHAN,
+  NOMBRE_FURAY,
+  PROTEINAS_GOHAN,
+  VEGETALES_GOHAN,
+  emptyGohanConfig,
+  esGohan,
+  esProductoOcultoGohan,
+  gohanConfigCompleta,
+  labelGohanArmado,
+  precioUnitarioGohan,
+  productoFuray,
+  productoGohan,
+} from "./gohan.js";
 
 const rawBase = import.meta.env.VITE_API_URL || "";
 const API_BASE = String(rawBase).replace(/\/$/, "");
 const PRECIO_PALTA_EXTRA = 1000;
 
 /** Extras que no se listan solos: se agregan al personalizar. */
-const OCULTOS_CARTA = new Set(["Salsa extra", "Palta extra"]);
+const OCULTOS_CARTA = new Set([
+  "Salsa extra",
+  "Palta extra",
+  "Proteína Furay",
+  "Topping ceviche",
+  "Topping acevichada",
+  "Topping teriyaki",
+  "Topping sriracha mayo",
+]);
 
 const CATEGORIAS = [
   ["ceviches", "Ceviches"],
@@ -24,9 +66,9 @@ const CATEGORIAS = [
   ["papas", "Papas"],
   ["shawarmas", "Shawarmas"],
   ["tablas", "Tablas"],
-  ["gohan", "Gohan"],
+  ["rolls", "Arma tu Roll"],
+  ["gohan", "Arma tu Gohan"],
   ["bebestibles", "Bebestibles"],
-  ["agregados", "Extras"],
 ];
 
 const CAT_LABEL = Object.fromEntries(CATEGORIAS);
@@ -38,9 +80,9 @@ const CAT_TONE = {
   papas: "tone-gold",
   shawarmas: "tone-spice",
   tablas: "tone-coral",
+  rolls: "tone-coral",
   gohan: "tone-leaf",
   bebestibles: "tone-sky",
-  agregados: "tone-mist",
 };
 
 const app = document.getElementById("app");
@@ -60,6 +102,8 @@ const state = {
   nota_pedido: "",
   fieldErrors: {},
   shawarmaConfig: null,
+  rollConfig: null,
+  gohanConfig: null,
   addModal: null,
   loading: true,
   paying: false,
@@ -67,7 +111,13 @@ const state = {
   toast: null,
   resultado: null,
   firstPaint: true,
+  /** { abierto, mensaje, horario } desde /api/horario-pedidos/ */
+  horario: { abierto: true, mensaje: "", horario: "" },
 };
+
+function pedidosAbiertos() {
+  return state.horario?.abierto !== false;
+}
 
 let toastTimer = null;
 
@@ -75,8 +125,14 @@ function money(n) {
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: "CLP",
+    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(Number(n) || 0);
+  }).format(Math.round(Number(n) || 0));
+}
+
+/** Precio arriba del modal: solo unidad; el total va en el botón. */
+function precioModalHeader(unit, extra = "") {
+  return `${money(unit)}${extra}`;
 }
 
 function showToast(msg, isError = false) {
@@ -136,8 +192,11 @@ function cartItemsCount() {
 
 function productosVisibles() {
   const q = state.busqueda.trim().toLowerCase();
-  return state.productos.filter((p) => {
+  const base = state.productos.filter((p) => {
+    if (p.categoria === "agregados") return false;
     if (OCULTOS_CARTA.has(p.nombre)) return false;
+    if (esProductoOcultoRoll(p)) return false;
+    if (esProductoOcultoGohan(p)) return false;
     if (state.categoria !== "todas" && p.categoria !== state.categoria) return false;
     if (!q) return true;
     return (
@@ -147,6 +206,21 @@ function productosVisibles() {
         .includes(q)
     );
   });
+  const card = tarjetaArmaTuRoll(state.productos);
+  if (!card) return base;
+  const matchCat =
+    state.categoria === "todas" || state.categoria === "rolls";
+  const matchQ =
+    !q ||
+    card.nombre.toLowerCase().includes(q) ||
+    String(card.descripcion || "")
+      .toLowerCase()
+      .includes(q);
+  if (!matchCat || !matchQ) return base;
+  if (state.categoria === "rolls") return [card, ...base];
+  const idx = base.findIndex((p) => p.categoria === "gohan");
+  if (idx === -1) return [...base, card];
+  return [...base.slice(0, idx), card, ...base.slice(idx)];
 }
 
 function productosPorSeccion() {
@@ -161,6 +235,17 @@ function productosPorSeccion() {
   })).filter((s) => s.items.length);
 }
 
+function mensajeErrorPublico(res, data, text) {
+  if (res.status === 429) {
+    const espera = String(data?.detail || "").match(/(\d+)\s*segundos?/i)?.[1];
+    return espera
+      ? `Hay muchas solicitudes seguidas. Espera ${espera} segundos y pulsa Reintentar.`
+      : "Hay muchas solicitudes seguidas. Espera un momento y pulsa Reintentar.";
+  }
+  if (typeof data?.detail === "string" && data.detail) return data.detail;
+  return text || `No se pudo conectar (error ${res.status}).`;
+}
+
 async function publicGet(path) {
   const res = await fetch(`${API_BASE}${path}`);
   const text = await res.text();
@@ -171,11 +256,7 @@ async function publicGet(path) {
     data = text;
   }
   if (!res.ok) {
-    throw new Error(
-      (typeof data?.detail === "string" && data.detail) ||
-        text ||
-        `Error HTTP ${res.status}`
-    );
+    throw new Error(mensajeErrorPublico(res, data, text));
   }
   return data;
 }
@@ -194,12 +275,7 @@ async function publicPost(path, body) {
     data = text;
   }
   if (!res.ok) {
-    throw new Error(
-      (typeof data?.detail === "string" && data.detail) ||
-        (data && typeof data === "object" ? JSON.stringify(data) : null) ||
-        text ||
-        `Error HTTP ${res.status}`
-    );
+    throw new Error(mensajeErrorPublico(res, data, text));
   }
   return data;
 }
@@ -219,6 +295,8 @@ function buildDetallesPayload() {
   return state.cart.flatMap((l) => {
     let notas = "";
     if (l.shawarma) notas = l.shawarma;
+    if (l.rollArmado) notas = l.rollArmado;
+    if (l.gohanArmado) notas = l.gohanArmado;
     if (l.nota) notas = notas ? `${notas} || ${l.nota}` : l.nota;
     const rows = [{ producto: l.producto, cantidad: l.cantidad, notas }];
     const extras = Number(l.extrasSalsa) || 0;
@@ -231,6 +309,32 @@ function buildDetallesPayload() {
           notas: `Extra(s) de ${l.nombre}: ${(l.salsas || []).join(", ")}`,
         });
       }
+    }
+    const extrasSalsaRoll = Number(l.extrasSalsaRoll) || 0;
+    if (extrasSalsaRoll > 0) {
+      const salsaId = idSalsaExtra();
+      if (salsaId) {
+        rows.push({
+          producto: salsaId,
+          cantidad: extrasSalsaRoll * l.cantidad,
+          notas: `Salsas de ${l.nombre}: ${(l.salsas || []).join(", ")}`,
+        });
+      }
+    }
+    for (const t of l.toppingsDetalle || []) {
+      rows.push({
+        producto: t.id,
+        cantidad: l.cantidad,
+        notas: `Topping ${t.label} en Arma tu Roll`,
+      });
+    }
+    const extrasFuray = Number(l.extrasFuray) || 0;
+    if (extrasFuray > 0 && l.furayProductoId) {
+      rows.push({
+        producto: l.furayProductoId,
+        cantidad: extrasFuray * l.cantidad,
+        notas: `Furay en Arma tu Gohan`,
+      });
     }
     const extrasPalta = Number(l.extrasPalta) || 0;
     if (extrasPalta > 0) {
@@ -292,6 +396,22 @@ function validarCheckout() {
 
 async function pagar() {
   if (state.paying) return;
+  try {
+    const horario = await publicGet("/api/horario-pedidos/");
+    state.horario = {
+      abierto: Boolean(horario?.abierto),
+      mensaje: horario?.mensaje || "",
+      horario: horario?.horario || "",
+    };
+  } catch {
+    /* si falla el check, el servidor igual puede rechazar */
+  }
+  if (!pedidosAbiertos()) {
+    state.cartOpen = true;
+    render();
+    showToast(state.horario.mensaje || "Ahora no recibimos pedidos online", true);
+    return;
+  }
   syncFormFromDom();
   if (!validarCheckout()) {
     state.cartOpen = true;
@@ -366,7 +486,166 @@ function setCantidad(index, delta) {
   render();
 }
 
+function abrirRollModal() {
+  const envOpts = envolturasDisponibles(state.productos);
+  if (!envOpts.length) {
+    showToast("Falta cargar Arma tu Roll. Ejecuta seed_menu.", true);
+    return;
+  }
+  state.rollConfig = {
+    envoltura: null,
+    relleno: null,
+    acompanamientoTipo: null,
+    vegetal: null,
+    toppings: emptyToppingsState(),
+    salsas: emptySalsasRollState(),
+    cantidad: 1,
+  };
+  state.shawarmaConfig = null;
+  state.gohanConfig = null;
+  state.addModal = null;
+  render({ preserveScroll: true });
+}
+
+function rollModalSnapshot(cfg) {
+  const envOpts = envolturasDisponibles(state.productos);
+  const topOpts = toppingsDisponibles(state.productos);
+  const envSel = envOpts.find((e) => e.env === cfg.envoltura) || null;
+  const tops = toppingsSeleccionados(cfg.toppings, topOpts);
+  const salsas = salsasSeleccionadasRoll(cfg.salsas);
+  const unit = precioUnitarioRoll({
+    precioEnvoltura: envSel?.precio || 0,
+    toppings: tops,
+    salsas,
+  });
+  return { envOpts, topOpts, envSel, tops, salsas, unit, cant: cfg.cantidad || 1 };
+}
+
+function syncRollModalUI() {
+  const cfg = state.rollConfig;
+  if (!cfg) return;
+  const { unit, cant, salsas } = rollModalSnapshot(cfg);
+  const precioEl = document.querySelector("#roll-overlay .pedir-modal-price");
+  if (precioEl) {
+    precioEl.textContent = precioModalHeader(
+      unit,
+      salsas.length ? ` · ${salsas.length} salsa(s)` : ""
+    );
+  }
+  const cantEl = document.getElementById("roll-cant-val");
+  if (cantEl) cantEl.textContent = String(cant);
+  const btn = document.getElementById("btn-confirmar-roll");
+  if (btn) {
+    btn.disabled = !rollConfigCompleta(cfg);
+    btn.textContent = `Agregar · ${money(unit * cant)}`;
+  }
+  document.querySelectorAll("[data-roll-env]").forEach((el) => {
+    el.classList.toggle("is-on", el.dataset.rollEnv === cfg.envoltura);
+  });
+  document.querySelectorAll("[data-roll-relleno]").forEach((el) => {
+    el.classList.toggle("is-on", el.dataset.rollRelleno === cfg.relleno);
+  });
+  document.querySelectorAll("[data-roll-acomp]").forEach((el) => {
+    const tipo = el.dataset.rollAcomp;
+    const on =
+      (tipo === "queso" && cfg.acompanamientoTipo === "queso") ||
+      (tipo === "vegetal" &&
+        cfg.acompanamientoTipo === "vegetal" &&
+        cfg.vegetal === el.dataset.rollVegetal);
+    el.classList.toggle("is-on", on);
+  });
+  document.querySelectorAll("[data-roll-topping]").forEach((el) => {
+    el.classList.toggle("is-on", Boolean(cfg.toppings[el.dataset.rollTopping]));
+  });
+  document.querySelectorAll("[data-roll-salsa]").forEach((el) => {
+    el.classList.toggle("is-on", Boolean(cfg.salsas[el.dataset.rollSalsa]));
+  });
+}
+
+function abrirGohanModal() {
+  const p = productoGohan(state.productos);
+  if (!p) {
+    showToast("Falta el producto Gohan. Ejecuta seed_menu.", true);
+    return;
+  }
+  state.gohanConfig = { ...emptyGohanConfig(), producto: p };
+  state.shawarmaConfig = null;
+  state.rollConfig = null;
+  state.addModal = null;
+  render({ preserveScroll: true });
+}
+
+function gohanModalSnapshot(cfg) {
+  const p = cfg.producto || productoGohan(state.productos);
+  const furay = productoFuray(state.productos);
+  const precioFuray = furay ? Number(furay.precio) || 0 : 0;
+  const unit = precioUnitarioGohan(p?.precio, cfg.furay, precioFuray);
+  return { p, furay, precioFuray, unit, cant: cfg.cantidad || 1 };
+}
+
+function syncGohanModalUI() {
+  const cfg = state.gohanConfig;
+  if (!cfg) return;
+  const { unit, cant, precioFuray } = gohanModalSnapshot(cfg);
+  const precioEl = document.querySelector("#gohan-overlay .pedir-modal-price");
+  if (precioEl) {
+    precioEl.textContent = precioModalHeader(
+      unit,
+      cfg.furay ? ` · incluye furay ${money(precioFuray)}` : ""
+    );
+  }
+  const cantEl = document.getElementById("gohan-cant-val");
+  if (cantEl) cantEl.textContent = String(cant);
+  const btn = document.getElementById("btn-confirmar-gohan");
+  if (btn) {
+    btn.disabled = !gohanConfigCompleta(cfg);
+    btn.textContent = `Agregar · ${money(unit * cant)}`;
+  }
+  document.querySelectorAll("[data-gohan-espol]").forEach((el) => {
+    el.classList.toggle("is-on", el.dataset.gohanEspol === cfg.espolvoreado);
+  });
+  document.querySelectorAll("[data-gohan-proteina]").forEach((el) => {
+    el.classList.toggle("is-on", el.dataset.gohanProteina === cfg.proteina);
+  });
+  document.getElementById("btn-gohan-furay")?.classList.toggle("is-on", Boolean(cfg.furay));
+  document.querySelectorAll("[data-gohan-veg]").forEach((el) => {
+    el.classList.toggle("is-on", (cfg.vegetales || []).includes(el.dataset.gohanVeg));
+  });
+  const vegHint = document.getElementById("gohan-veg-hint");
+  if (vegHint) {
+    const n = (cfg.vegetales || []).length;
+    vegHint.textContent = n ? ` · ${n}/2` : "";
+  }
+  if (!cfg.vegError) clearGohanVegError();
+}
+
+function showGohanVegError(msg) {
+  if (state.gohanConfig) state.gohanConfig.vegError = msg;
+  const err = document.getElementById("gohan-veg-error");
+  if (err) {
+    err.textContent = msg;
+    err.classList.add("is-error");
+  }
+}
+
+function clearGohanVegError() {
+  if (state.gohanConfig) state.gohanConfig.vegError = null;
+  const err = document.getElementById("gohan-veg-error");
+  if (err) {
+    err.textContent = "";
+    err.classList.remove("is-error");
+  }
+}
+
 function abrirProducto(p) {
+  if (p?._virtualRoll || p?.id === "arma-tu-roll") {
+    abrirRollModal();
+    return;
+  }
+  if (esGohan(p)) {
+    abrirGohanModal();
+    return;
+  }
   if (esShawarma(p)) {
     const parsed = parseIngredientesShawarma(p);
     state.shawarmaConfig = {
@@ -375,13 +654,24 @@ function abrirProducto(p) {
       eligeProteina: parsed.eligeProteina,
       proteinaOpciones: parsed.proteinaOpciones,
       proteina: parsed.eligeProteina ? parsed.proteinaOpciones[0] : "",
+      masa: MASA_DEFAULT,
       salsas: Object.fromEntries(SALSAS_SHAWARMA.map((s) => [s, false])),
       cantidad: 1,
     };
     state.addModal = null;
+    state.rollConfig = null;
+    state.gohanConfig = null;
   } else {
-    state.addModal = { producto: p, cantidad: 1, nota: "", conPalta: false };
+    state.addModal = {
+      producto: p,
+      cantidad: 1,
+      nota: "",
+      conPalta: false,
+      salsas: esTabla(p) ? emptySalsasRollState() : null,
+    };
     state.shawarmaConfig = null;
+    state.rollConfig = null;
+    state.gohanConfig = null;
   }
   render({ preserveScroll: true });
 }
@@ -389,7 +679,11 @@ function abrirProducto(p) {
 function syncAddModalUI() {
   const m = state.addModal;
   if (!m) return;
-  const unit = Number(m.producto.precio) + (m.conPalta ? PRECIO_PALTA_EXTRA : 0);
+  const salsas = m.salsas ? salsasSeleccionadasRoll(m.salsas) : [];
+  const unit =
+    Number(m.producto.precio) +
+    (m.conPalta ? PRECIO_PALTA_EXTRA : 0) +
+    salsas.length * PRECIO_SALSA_EXTRA_ROLL;
   const cant = m.cantidad || 1;
   const precioEl = document.querySelector("#add-overlay .pedir-modal-price");
   if (precioEl) precioEl.textContent = money(unit);
@@ -399,6 +693,9 @@ function syncAddModalUI() {
   if (btn) btn.textContent = `Agregar · ${money(unit * cant)}`;
   const cb = document.getElementById("add-palta");
   if (cb && cb.checked !== Boolean(m.conPalta)) cb.checked = Boolean(m.conPalta);
+  document.querySelectorAll("[data-tabla-salsa]").forEach((el) => {
+    el.classList.toggle("is-on", Boolean(m.salsas?.[el.dataset.tablaSalsa]));
+  });
 }
 
 function syncShawarmaModalUI() {
@@ -410,12 +707,18 @@ function syncShawarmaModalUI() {
   const cant = cfg.cantidad || 1;
   const precioEl = document.querySelector("#shawarma-overlay .pedir-modal-price");
   if (precioEl) {
-    precioEl.textContent = `${money(unit)} · total ${money(unit * cant)}`;
+    precioEl.textContent = precioModalHeader(
+      unit,
+      extras ? ` · incluye ${extras} salsa(s) extra` : ""
+    );
   }
   const cantEl = document.getElementById("shawarma-cant-val");
   if (cantEl) cantEl.textContent = String(cant);
   const btn = document.getElementById("btn-confirmar-shawarma");
   if (btn) btn.textContent = `Agregar · ${money(unit * cant)}`;
+  document.querySelectorAll("[data-masa]").forEach((el) => {
+    el.classList.toggle("is-on", (cfg.masa || MASA_DEFAULT) === el.dataset.masa);
+  });
   document.querySelectorAll("[data-proteina]").forEach((el) => {
     el.classList.toggle("is-on", cfg.proteina === el.dataset.proteina);
   });
@@ -456,16 +759,24 @@ function renderResultado() {
 
 function renderProductRow(p) {
   const tone = CAT_TONE[p.categoria] || "tone-mist";
+  const needsConfig =
+    esShawarma(p) ||
+    esTabla(p) ||
+    esGohan(p) ||
+    p._virtualRoll ||
+    p.categoria === "ceviches";
+  const titulo = esGohan(p) ? "Arma tu Gohan" : p.nombre;
+  const precioTxt = p._virtualRoll ? `Desde ${money(p.precio)}` : money(p.precio);
   return `
     <article class="pedir-item ${tone}" data-add="${p.id}">
       <div class="pedir-item-swatch" aria-hidden="true"></div>
       <div class="pedir-item-body">
-        <h3>${escapeHtml(p.nombre)}</h3>
+        <h3>${escapeHtml(titulo)}</h3>
         ${p.descripcion ? `<p>${escapeHtml(p.descripcion)}</p>` : ""}
-        <div class="pedir-item-price">${money(p.precio)}</div>
+        <div class="pedir-item-price">${precioTxt}</div>
       </div>
-      <button type="button" class="pedir-item-add" data-add="${p.id}" aria-label="Agregar ${escapeHtml(p.nombre)}">
-        <span aria-hidden="true">+</span>
+      <button type="button" class="pedir-item-add" data-add="${p.id}" aria-label="Agregar ${escapeHtml(titulo)}">
+        <span aria-hidden="true">${needsConfig ? "⋯" : "+"}</span>
       </button>
     </article>
   `;
@@ -509,6 +820,8 @@ function renderCartLines() {
           <div class="pedir-cart-line-info">
             <strong>${escapeHtml(l.nombre)}</strong>
             ${l.shawarma ? `<span>${escapeHtml(l.shawarma)}</span>` : ""}
+            ${l.rollArmado ? `<span>${escapeHtml(l.rollArmado)}</span>` : ""}
+            ${l.gohanArmado ? `<span>${escapeHtml(l.gohanArmado)}</span>` : ""}
             ${l.nota ? `<span>Nota: ${escapeHtml(l.nota)}</span>` : ""}
             <em>${money(l.precio)} c/u</em>
           </div>
@@ -618,8 +931,23 @@ function renderCartDrawer() {
                 <div class="is-total"><span>Total</span><strong>${money(cartTotal())}</strong></div>
               </div>
               <p class="pedir-pay-hint">Pagas con Webpay. Si anulas en Transbank, no se cobra ni llega el pedido.</p>
-              <button type="button" class="pedir-btn-primary" id="btn-pagar" ${state.paying ? "disabled" : ""}>
-                ${state.paying ? "Abriendo Webpay…" : `Pagar con Webpay · ${money(cartTotal())}`}
+              ${
+                !pedidosAbiertos()
+                  ? `<p class="pedir-closed-msg">${escapeHtml(
+                      state.horario.mensaje || "Ahora no recibimos pedidos online"
+                    )}</p>`
+                  : ""
+              }
+              <button type="button" class="pedir-btn-primary" id="btn-pagar" ${
+                state.paying || !pedidosAbiertos() ? "disabled" : ""
+              }>
+                ${
+                  state.paying
+                    ? "Abriendo Webpay…"
+                    : !pedidosAbiertos()
+                      ? "Cerrado ahora"
+                      : `Pagar con Webpay · ${money(cartTotal())}`
+                }
               </button>
             </footer>`
           : ""
@@ -632,7 +960,11 @@ function renderAddModal() {
   const m = state.addModal;
   if (!m) return "";
   const p = m.producto;
-  const unit = Number(p.precio) + (m.conPalta ? PRECIO_PALTA_EXTRA : 0);
+  const salsasSel = m.salsas ? salsasSeleccionadasRoll(m.salsas) : [];
+  const unit =
+    Number(p.precio) +
+    (m.conPalta ? PRECIO_PALTA_EXTRA : 0) +
+    salsasSel.length * PRECIO_SALSA_EXTRA_ROLL;
   return `
     <div class="pedir-modal-backdrop is-open" id="add-overlay" role="dialog" aria-modal="true">
       <div class="pedir-modal">
@@ -648,7 +980,23 @@ function renderAddModal() {
           ${p.descripcion ? `<p class="pedir-modal-desc">${escapeHtml(p.descripcion)}</p>` : ""}
           ${
             esTabla(p)
-              ? `<p class="pedir-modal-note">Puedes dejar una nota; el local confirma cambios de rolls.</p>`
+              ? `<p class="pedir-modal-note">Puedes dejar una nota; el local confirma cambios de rolls.</p>
+                <div class="pedir-opt">
+                  <p><strong>Salsas</strong> <span>· ${money(PRECIO_SALSA_EXTRA_ROLL)} c/u</span></p>
+                  <div class="pedir-chips">
+                    ${SALSAS_ROLL.map(
+                      (s) => `
+                      <button type="button" class="pedir-chip ${
+                        m.salsas?.[s] ? "is-on" : ""
+                      }" data-tabla-salsa="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+                    ).join("")}
+                  </div>
+                  ${
+                    salsasSel.length
+                      ? `<p class="pedir-modal-note">${salsasSel.length} salsa(s)</p>`
+                      : ""
+                  }
+                </div>`
               : ""
           }
           ${
@@ -697,11 +1045,27 @@ function renderShawarmaModal() {
           <div>
             <p class="pedir-modal-kicker">Personalizar</p>
             <h2>${escapeHtml(p.nombre)}</h2>
-            <p class="pedir-modal-price">${money(unit)} · total ${money(unit * cant)}</p>
+            <p class="pedir-modal-price">${precioModalHeader(
+              unit,
+              extras ? ` · incluye ${extras} salsa(s) extra` : ""
+            )}</p>
           </div>
           <button type="button" class="pedir-icon-btn" id="btn-cerrar-shawarma" aria-label="Cerrar">×</button>
         </header>
         <div class="pedir-modal-body">
+          <div class="pedir-opt">
+            <p><strong>Masa</strong></p>
+            <div class="pedir-chips">
+              ${MASAS_SHAWARMA.map(
+                (m) => `
+                <button type="button" class="pedir-chip ${
+                  (cfg.masa || MASA_DEFAULT) === m.id ? "is-on" : ""
+                }" data-masa="${escapeHtml(m.id)}">${escapeHtml(m.label)}${
+                  m.detalle ? ` · ${escapeHtml(m.detalle)}` : ""
+                }</button>`
+              ).join("")}
+            </div>
+          </div>
           ${
             cfg.eligeProteina
               ? `<div class="pedir-opt">
@@ -751,6 +1115,212 @@ function renderShawarmaModal() {
         </div>
         <footer>
           <button type="button" class="pedir-btn-primary" id="btn-confirmar-shawarma">
+            Agregar · ${money(unit * cant)}
+          </button>
+        </footer>
+      </div>
+    </div>
+  `;
+}
+
+function renderRollModal() {
+  const cfg = state.rollConfig;
+  if (!cfg) return "";
+  const { envOpts, topOpts, unit, cant, salsas } = rollModalSnapshot(cfg);
+  const completa = rollConfigCompleta(cfg);
+  return `
+    <div class="pedir-modal-backdrop is-open" id="roll-overlay" role="dialog" aria-modal="true">
+      <div class="pedir-modal pedir-modal-wide">
+        <header>
+          <div>
+            <p class="pedir-modal-kicker">Arma tu Roll</p>
+            <h2>Personalizar roll</h2>
+            <p class="pedir-modal-price">${precioModalHeader(
+              unit,
+              salsas.length ? ` · ${salsas.length} salsa(s)` : ""
+            )}</p>
+          </div>
+          <button type="button" class="pedir-icon-btn" id="btn-cerrar-roll" aria-label="Cerrar">×</button>
+        </header>
+        <div class="pedir-modal-body">
+          <div class="pedir-opt">
+            <p><strong>Envoltura</strong></p>
+            <div class="pedir-chips">
+              ${envOpts
+                .map(
+                  (e) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.envoltura === e.env ? "is-on" : ""
+                }" data-roll-env="${escapeHtml(e.env)}">${escapeHtml(e.env)} · ${money(
+                    e.precio
+                  )}</button>`
+                )
+                .join("")}
+            </div>
+          </div>
+          <div class="pedir-opt">
+            <p><strong>Carne o vegetal</strong></p>
+            <div class="pedir-chips">
+              ${RELLENOS_ROLL.map(
+                (r) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.relleno === r ? "is-on" : ""
+                }" data-roll-relleno="${escapeHtml(r)}">${escapeHtml(r)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <div class="pedir-opt">
+            <p><strong>Acompañamiento</strong></p>
+            <div class="pedir-chips">
+              <button type="button" class="pedir-chip ${
+                cfg.acompanamientoTipo === "queso" ? "is-on" : ""
+              }" data-roll-acomp="queso">${escapeHtml(ACOMP_QUESO)}</button>
+              ${VEGETALES_ROLL.map(
+                (v) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.acompanamientoTipo === "vegetal" && cfg.vegetal === v
+                    ? "is-on"
+                    : ""
+                }" data-roll-acomp="vegetal" data-roll-vegetal="${escapeHtml(
+                  v
+                )}">${escapeHtml(v)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          ${
+            topOpts.length
+              ? `<div class="pedir-opt">
+            <p><strong>Topping</strong></p>
+            <div class="pedir-chips">
+              ${topOpts
+                .map(
+                  (t) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.toppings[t.key] ? "is-on" : ""
+                }" data-roll-topping="${escapeHtml(t.key)}">${escapeHtml(
+                    t.label
+                  )} · +${money(t.precio)}</button>`
+                )
+                .join("")}
+            </div>
+          </div>`
+              : ""
+          }
+          <div class="pedir-opt">
+            <p><strong>Salsas extras</strong> <span>· ${money(PRECIO_SALSA_EXTRA_ROLL)} c/u</span></p>
+            <div class="pedir-chips">
+              ${SALSAS_ROLL.map(
+                (s) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.salsas[s] ? "is-on" : ""
+                }" data-roll-salsa="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+              ).join("")}
+            </div>
+            ${salsas.length ? `<p class="pedir-modal-note">${salsas.length} salsa(s)</p>` : ""}
+          </div>
+          <div class="pedir-field">
+            <label>Cantidad</label>
+            <div class="pedir-qty pedir-qty-lg">
+              <button type="button" id="roll-cant-minus" aria-label="Menos">−</button>
+              <span id="roll-cant-val">${cant}</span>
+              <button type="button" id="roll-cant-plus" aria-label="Más">+</button>
+            </div>
+          </div>
+        </div>
+        <footer>
+          <button type="button" class="pedir-btn-primary" id="btn-confirmar-roll" ${
+            completa ? "" : "disabled"
+          }>
+            Agregar · ${money(unit * cant)}
+          </button>
+        </footer>
+      </div>
+    </div>
+  `;
+}
+
+function renderGohanModal() {
+  const cfg = state.gohanConfig;
+  if (!cfg) return "";
+  const { unit, cant, precioFuray, furay } = gohanModalSnapshot(cfg);
+  const completa = gohanConfigCompleta(cfg);
+  const vegCount = (cfg.vegetales || []).length;
+  return `
+    <div class="pedir-modal-backdrop is-open" id="gohan-overlay" role="dialog" aria-modal="true">
+      <div class="pedir-modal pedir-modal-wide">
+        <header>
+          <div>
+            <p class="pedir-modal-kicker">Arma tu Gohan</p>
+            <h2>Personalizar gohan</h2>
+            <p class="pedir-modal-price">${precioModalHeader(
+              unit,
+              cfg.furay ? ` · incluye furay ${money(precioFuray)}` : ""
+            )}</p>
+          </div>
+          <button type="button" class="pedir-icon-btn" id="btn-cerrar-gohan" aria-label="Cerrar">×</button>
+        </header>
+        <div class="pedir-modal-body">
+          <p class="pedir-modal-note">Incluye arroz, queso phila, salsa y espolvoreado</p>
+          <div class="pedir-opt">
+            <p><strong>Espolvoreado</strong></p>
+            <div class="pedir-chips">
+              ${ESPOLVOREADOS_GOHAN.map(
+                (e) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.espolvoreado === e ? "is-on" : ""
+                }" data-gohan-espol="${escapeHtml(e)}">${escapeHtml(e)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <div class="pedir-opt">
+            <p><strong>Proteína o vegetal</strong></p>
+            <div class="pedir-chips">
+              ${PROTEINAS_GOHAN.map(
+                (r) => `
+                <button type="button" class="pedir-chip ${
+                  cfg.proteina === r ? "is-on" : ""
+                }" data-gohan-proteina="${escapeHtml(r)}">${escapeHtml(r)}</button>`
+              ).join("")}
+            </div>
+            ${
+              furay
+                ? `<div class="pedir-chips" style="margin-top:8px">
+                <button type="button" class="pedir-chip ${
+                  cfg.furay ? "is-on" : ""
+                }" id="btn-gohan-furay">Furay · +${money(precioFuray)}</button>
+              </div>`
+                : ""
+            }
+          </div>
+          <div class="pedir-opt">
+            <p><strong>Vegetales</strong><span id="gohan-veg-hint">${
+              vegCount ? ` · ${vegCount}/2` : ""
+            }</span> <span>· elige 2</span></p>
+            <p class="pedir-opt-msg${cfg.vegError ? " is-error" : ""}" id="gohan-veg-error" role="alert">${
+              cfg.vegError ? escapeHtml(cfg.vegError) : ""
+            }</p>
+            <div class="pedir-chips">
+              ${VEGETALES_GOHAN.map(
+                (v) => `
+                <button type="button" class="pedir-chip ${
+                  (cfg.vegetales || []).includes(v) ? "is-on" : ""
+                }" data-gohan-veg="${escapeHtml(v)}">${escapeHtml(v)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <div class="pedir-field">
+            <label>Cantidad</label>
+            <div class="pedir-qty pedir-qty-lg">
+              <button type="button" id="gohan-cant-minus" aria-label="Menos">−</button>
+              <span id="gohan-cant-val">${cant}</span>
+              <button type="button" id="gohan-cant-plus" aria-label="Más">+</button>
+            </div>
+          </div>
+        </div>
+        <footer>
+          <button type="button" class="pedir-btn-primary" id="btn-confirmar-gohan" ${
+            completa ? "" : "disabled"
+          }>
             Agregar · ${money(unit * cant)}
           </button>
         </footer>
@@ -819,8 +1389,27 @@ function renderMain() {
         <p class="pedir-hero-kicker">Para llevar · Punta Arenas</p>
         <h1 class="pedir-hero-brand">el Tenedor</h1>
         <p class="pedir-hero-script">General del Canto</p>
-        <p class="pedir-hero-lead">¿Qué se te antoja hoy? Arma tu pedido con calma y paga seguro con Webpay.</p>
+        <p class="pedir-hero-lead">${
+          pedidosAbiertos()
+            ? "¿Qué se te antoja hoy? Arma tu pedido con calma y paga seguro con Webpay."
+            : escapeHtml(
+                state.horario.mensaje ||
+                  "Ahora no recibimos pedidos online. Horario: lunes a sábado de 12:00 a 15:45 y de 18:00 a 22:45."
+              )
+        }</p>
+        ${
+          pedidosAbiertos() && state.horario.horario
+            ? `<p class="pedir-hours">${escapeHtml(state.horario.horario)}</p>`
+            : ""
+        }
       </div>
+      ${
+        !pedidosAbiertos()
+          ? `<div class="pedir-closed-banner" role="status">${escapeHtml(
+              state.horario.mensaje || "Ahora no recibimos pedidos online"
+            )}</div>`
+          : ""
+      }
 
       <div class="pedir-controls">
         <div class="pedir-search">
@@ -857,6 +1446,8 @@ function renderMain() {
       ${renderCartDrawer()}
       ${renderAddModal()}
       ${renderShawarmaModal()}
+      ${renderRollModal()}
+      ${renderGohanModal()}
     </div>
   `;
 }
@@ -955,11 +1546,14 @@ function bind() {
     });
   });
 
+  function productoDesdeAddId(id) {
+    if (String(id) === "arma-tu-roll") return tarjetaArmaTuRoll(state.productos);
+    return state.productos.find((x) => String(x.id) === String(id));
+  }
   document.querySelectorAll(".pedir-item").forEach((row) => {
     row.addEventListener("click", (e) => {
       e.preventDefault();
-      const id = row.dataset.add;
-      const p = state.productos.find((x) => String(x.id) === String(id));
+      const p = productoDesdeAddId(row.dataset.add);
       if (p) abrirProducto(p);
     });
   });
@@ -967,8 +1561,7 @@ function bind() {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const id = btn.dataset.add;
-      const p = state.productos.find((x) => String(x.id) === String(id));
+      const p = productoDesdeAddId(btn.dataset.add);
       if (p) abrirProducto(p);
     });
   });
@@ -1042,6 +1635,16 @@ function bind() {
     state.addModal.conPalta = Boolean(document.getElementById("add-palta")?.checked);
     syncAddModalUI();
   });
+  document.querySelectorAll("[data-tabla-salsa]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.addModal?.salsas) return;
+      const salsa = btn.dataset.tablaSalsa;
+      state.addModal.salsas[salsa] = !state.addModal.salsas[salsa];
+      state.addModal.nota = document.getElementById("add-nota")?.value || "";
+      syncAddModalUI();
+    });
+  });
   document.getElementById("btn-confirmar-add")?.addEventListener("click", (e) => {
     e.preventDefault();
     const m = state.addModal;
@@ -1050,7 +1653,18 @@ function bind() {
     const conPalta =
       m.producto.categoria === "ceviches" &&
       Boolean(document.getElementById("add-palta")?.checked);
-    const precio = Number(m.producto.precio) + (conPalta ? PRECIO_PALTA_EXTRA : 0);
+    const salsas = m.salsas ? salsasSeleccionadasRoll(m.salsas) : [];
+    if (salsas.length > 0 && !idSalsaExtra()) {
+      showToast("Falta el producto «Salsa extra» en la carta.", true);
+      return;
+    }
+    const precio =
+      Number(m.producto.precio) +
+      (conPalta ? PRECIO_PALTA_EXTRA : 0) +
+      salsas.length * PRECIO_SALSA_EXTRA_ROLL;
+    const notaParts = [];
+    if (nota.trim()) notaParts.push(nota.trim());
+    if (salsas.length) notaParts.push(`Salsas: ${salsas.join(", ")}`);
     state.cart.push({
       producto: m.producto.id,
       nombre: m.producto.nombre + (conPalta ? " + palta" : ""),
@@ -1058,8 +1672,10 @@ function bind() {
       precio,
       precioBase: Number(m.producto.precio),
       cantidad: m.cantidad,
-      nota,
+      nota: notaParts.join(" · "),
       extrasPalta: conPalta ? 1 : 0,
+      salsas,
+      extrasSalsaRoll: salsas.length,
     });
     state.addModal = null;
     state.cartOpen = true;
@@ -1078,6 +1694,14 @@ function bind() {
       state.shawarmaConfig = null;
       render({ preserveScroll: true });
     }
+  });
+  document.querySelectorAll("[data-masa]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.shawarmaConfig) return;
+      state.shawarmaConfig.masa = btn.dataset.masa;
+      syncShawarmaModalUI();
+    });
   });
   document.querySelectorAll("[data-proteina]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -1148,11 +1772,235 @@ function bind() {
         proteina: cfg.proteina,
         salsas,
         extras,
+        masa: cfg.masa || MASA_DEFAULT,
       }),
       salsas,
       extrasSalsa: extras,
+      masa: cfg.masa || MASA_DEFAULT,
     });
     state.shawarmaConfig = null;
+    state.cartOpen = true;
+    state.fieldErrors = {};
+    render({ preserveScroll: true });
+    showToast("Agregado al pedido");
+  });
+
+  document.getElementById("btn-cerrar-roll")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    state.rollConfig = null;
+    render({ preserveScroll: true });
+  });
+  document.getElementById("roll-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "roll-overlay") {
+      state.rollConfig = null;
+      render({ preserveScroll: true });
+    }
+  });
+  document.querySelectorAll("[data-roll-env]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.rollConfig) return;
+      state.rollConfig.envoltura = btn.dataset.rollEnv;
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-relleno]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.rollConfig) return;
+      state.rollConfig.relleno = btn.dataset.rollRelleno;
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-acomp]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.rollConfig) return;
+      if (btn.dataset.rollAcomp === "queso") {
+        state.rollConfig.acompanamientoTipo = "queso";
+        state.rollConfig.vegetal = null;
+      } else {
+        state.rollConfig.acompanamientoTipo = "vegetal";
+        state.rollConfig.vegetal = btn.dataset.rollVegetal;
+      }
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-topping]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.rollConfig) return;
+      const key = btn.dataset.rollTopping;
+      state.rollConfig.toppings[key] = !state.rollConfig.toppings[key];
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-salsa]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.rollConfig) return;
+      const salsa = btn.dataset.rollSalsa;
+      state.rollConfig.salsas[salsa] = !state.rollConfig.salsas[salsa];
+      syncRollModalUI();
+    });
+  });
+  document.getElementById("roll-cant-minus")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!state.rollConfig) return;
+    state.rollConfig.cantidad = Math.max(1, (state.rollConfig.cantidad || 1) - 1);
+    syncRollModalUI();
+  });
+  document.getElementById("roll-cant-plus")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!state.rollConfig) return;
+    state.rollConfig.cantidad = (state.rollConfig.cantidad || 1) + 1;
+    syncRollModalUI();
+  });
+  document.getElementById("btn-confirmar-roll")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const cfg = state.rollConfig;
+    if (!cfg || !rollConfigCompleta(cfg)) {
+      showToast("Elige envoltura, relleno y acompañamiento", true);
+      return;
+    }
+    const { envSel, tops, salsas, unit } = rollModalSnapshot(cfg);
+    if (!envSel) {
+      showToast("Falta la envoltura en la carta. Ejecuta seed_menu.", true);
+      return;
+    }
+    if (salsas.length > 0 && !idSalsaExtra()) {
+      showToast("Falta el producto «Salsa extra» en la carta.", true);
+      return;
+    }
+    const cant = cfg.cantidad || 1;
+    const toppingsLabels = tops.map((t) => t.label);
+    state.cart.push({
+      producto: envSel.producto.id,
+      nombre: "Arma tu Roll",
+      categoria: "rolls",
+      precio: unit,
+      precioBase: Number(envSel.precio),
+      cantidad: cant,
+      rollArmado: labelRollArmado({
+        envoltura: cfg.envoltura,
+        relleno: cfg.relleno,
+        acompanamientoTipo: cfg.acompanamientoTipo,
+        vegetal: cfg.vegetal,
+        toppingsLabels,
+        salsas,
+      }),
+      salsas,
+      extrasSalsaRoll: salsas.length,
+      toppingsDetalle: tops.map((t) => ({
+        id: t.productoObj.id,
+        nombre: t.producto,
+        label: t.label,
+        precio: t.precio,
+      })),
+    });
+    state.rollConfig = null;
+    state.cartOpen = true;
+    state.fieldErrors = {};
+    render({ preserveScroll: true });
+    showToast("Agregado al pedido");
+  });
+
+  document.getElementById("btn-cerrar-gohan")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    state.gohanConfig = null;
+    render({ preserveScroll: true });
+  });
+  document.getElementById("gohan-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "gohan-overlay") {
+      state.gohanConfig = null;
+      render({ preserveScroll: true });
+    }
+  });
+  document.querySelectorAll("[data-gohan-espol]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.gohanConfig) return;
+      state.gohanConfig.espolvoreado = btn.dataset.gohanEspol;
+      syncGohanModalUI();
+    });
+  });
+  document.querySelectorAll("[data-gohan-proteina]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.gohanConfig) return;
+      state.gohanConfig.proteina = btn.dataset.gohanProteina;
+      syncGohanModalUI();
+    });
+  });
+  document.getElementById("btn-gohan-furay")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!state.gohanConfig) return;
+    state.gohanConfig.furay = !state.gohanConfig.furay;
+    syncGohanModalUI();
+  });
+  document.querySelectorAll("[data-gohan-veg]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!state.gohanConfig) return;
+      const veg = btn.dataset.gohanVeg;
+      const list = [...(state.gohanConfig.vegetales || [])];
+      const idx = list.indexOf(veg);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+      } else if (list.length >= 2) {
+        showGohanVegError("Solo puedes elegir 2");
+        return;
+      } else {
+        list.push(veg);
+      }
+      state.gohanConfig.vegetales = list;
+      state.gohanConfig.vegError = null;
+      syncGohanModalUI();
+    });
+  });
+  document.getElementById("gohan-cant-minus")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!state.gohanConfig) return;
+    state.gohanConfig.cantidad = Math.max(1, (state.gohanConfig.cantidad || 1) - 1);
+    syncGohanModalUI();
+  });
+  document.getElementById("gohan-cant-plus")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!state.gohanConfig) return;
+    state.gohanConfig.cantidad = (state.gohanConfig.cantidad || 1) + 1;
+    syncGohanModalUI();
+  });
+  document.getElementById("btn-confirmar-gohan")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const cfg = state.gohanConfig;
+    if (!cfg || !gohanConfigCompleta(cfg)) {
+      showToast("Elige espolvoreado, proteína y 2 vegetales", true);
+      return;
+    }
+    const { p, furay, precioFuray, unit } = gohanModalSnapshot(cfg);
+    if (!p) {
+      showToast("Falta el producto Gohan. Ejecuta seed_menu.", true);
+      return;
+    }
+    if (cfg.furay && !furay) {
+      showToast(`Falta el producto «${NOMBRE_FURAY}».`, true);
+      return;
+    }
+    const cant = cfg.cantidad || 1;
+    state.cart.push({
+      producto: p.id,
+      nombre: "Arma tu Gohan",
+      categoria: "gohan",
+      precio: unit,
+      precioBase: Number(p.precio),
+      cantidad: cant,
+      gohanArmado: labelGohanArmado(cfg),
+      furay: Boolean(cfg.furay),
+      extrasFuray: cfg.furay ? 1 : 0,
+      furayProductoId: furay?.id || null,
+      furayPrecio: precioFuray,
+    });
+    state.gohanConfig = null;
     state.cartOpen = true;
     state.fieldErrors = {};
     render({ preserveScroll: true });
@@ -1168,6 +2016,12 @@ document.addEventListener("keydown", (e) => {
   } else if (state.shawarmaConfig) {
     state.shawarmaConfig = null;
     render();
+  } else if (state.rollConfig) {
+    state.rollConfig = null;
+    render();
+  } else if (state.gohanConfig) {
+    state.gohanConfig = null;
+    render();
   } else if (state.cartOpen) {
     syncFormFromDom();
     state.cartOpen = false;
@@ -1180,12 +2034,22 @@ async function loadCarta() {
   state.error = null;
   render();
   try {
-    const [productos, zonas] = await Promise.all([
+    const [productos, zonas, horario] = await Promise.all([
       publicGet("/api/carta/"),
       publicGet("/api/zonas-delivery/publicas/").catch(() => []),
+      publicGet("/api/horario-pedidos/").catch(() => ({
+        abierto: true,
+        mensaje: "",
+        horario: "",
+      })),
     ]);
     state.productos = productos;
     state.zonas = Array.isArray(zonas) ? zonas : [];
+    state.horario = {
+      abierto: horario?.abierto !== false,
+      mensaje: horario?.mensaje || "",
+      horario: horario?.horario || "",
+    };
     state.loading = false;
     if (!CATEGORIAS.some(([id]) => state.productos.some((p) => p.categoria === id))) {
       state.categoria = "todas";

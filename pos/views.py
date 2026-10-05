@@ -36,7 +36,16 @@ from rest_framework.throttling import AnonRateThrottle
 
 from rest_framework.views import APIView
 
-from .models import CajaDiaria, DetalleVenta, Inventario, Pedido, Producto, Venta, ZonaDelivery
+from .models import (
+    CajaDiaria,
+    DetalleVenta,
+    HorarioPedidosWeb,
+    Inventario,
+    Pedido,
+    Producto,
+    Venta,
+    ZonaDelivery,
+)
 from .permissions import (
 
     EsAdministrador,
@@ -58,7 +67,7 @@ from .serializers import (
     CartaProductoSerializer,
 
     CustomUserSerializer,
-
+    HorarioPedidosWebSerializer,
     InventarioSerializer,
 
     PedidoCreateSerializer,
@@ -81,7 +90,7 @@ from .serializers import (
     validar_entrega_y_cobro,
 
 )
-
+from .horario_pedidos import estado_pedidos_web, pedidos_web_abiertos
 from .services_pedidos import (
 
     confirmar_pago_autorizado,
@@ -427,6 +436,7 @@ class ZonasDeliveryPublicasView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = []  # lectura pública; el cupo estricto es al crear pedidos
 
     def get(self, request):
         qs = ZonaDelivery.objects.all()
@@ -1191,6 +1201,7 @@ class CartaView(APIView):
     permission_classes = [AllowAny]
 
     authentication_classes = []
+    throttle_classes = []  # lectura pública; el cupo estricto es al crear pedidos
 
     def get(self, request):
 
@@ -1201,6 +1212,48 @@ class CartaView(APIView):
         )
 
         return Response(CartaProductoSerializer(qs, many=True).data)
+
+
+class HorarioPedidosView(APIView):
+    """Indica si la carta pública acepta pedidos ahora."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = []  # lectura pública; el cupo estricto es al crear pedidos
+
+    def get(self, request):
+        return Response(estado_pedidos_web())
+
+
+class HorarioPedidosConfigView(APIView):
+    """
+    Configuración editable del horario de pedidos web.
+    GET: cajero y admin. PUT/PATCH: solo administrador.
+    """
+
+    permission_classes = [LecturaTodosEscrituraAdmin]
+
+    def get_object(self):
+        return HorarioPedidosWeb.get_solo()
+
+    def get(self, request):
+        return Response(HorarioPedidosWebSerializer(self.get_object()).data)
+
+    def put(self, request):
+        return self._guardar(request, partial=False)
+
+    def patch(self, request):
+        return self._guardar(request, partial=True)
+
+    def _guardar(self, request, partial):
+        obj = self.get_object()
+        serializer = HorarioPedidosWebSerializer(
+            obj, data=request.data, partial=partial
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
 
 class PedidoRetornoView(APIView):
 
@@ -1403,7 +1456,12 @@ class PedidoViewSet(
         return qs
 
     def create(self, request, *args, **kwargs):
-
+        if not pedidos_web_abiertos():
+            estado = estado_pedidos_web()
+            return Response(
+                {"detail": estado["mensaje"]},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = PedidoCreateSerializer(data=request.data)
 
         serializer.is_valid(raise_exception=True)

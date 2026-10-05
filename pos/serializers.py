@@ -18,6 +18,7 @@ from .models import (
     Pedido,
     Producto,
     Venta,
+    HorarioPedidosWeb,
     ZonaDelivery,
 )
 USUARIO_PEDIDOS_WEB = "pedidos-web"
@@ -400,6 +401,55 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
 class CajaDiariaCierreSerializer(serializers.Serializer):
     """Entrada para calcular y persistir el cierre de una fecha."""
     fecha = serializers.DateField(required=True)
+
+
+class HorarioPedidosWebSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HorarioPedidosWeb
+        fields = (
+            "habilitado",
+            "lunes",
+            "martes",
+            "miercoles",
+            "jueves",
+            "viernes",
+            "sabado",
+            "domingo",
+            "turno1_inicio",
+            "turno1_fin",
+            "turno2_activo",
+            "turno2_inicio",
+            "turno2_fin",
+            "texto_horario",
+            "mensaje_cerrado",
+            "actualizado_en",
+        )
+        read_only_fields = ("actualizado_en",)
+
+    def validate(self, attrs):
+        instance = getattr(self, "instance", None)
+
+        def val(name, default=None):
+            if name in attrs:
+                return attrs[name]
+            if instance is not None:
+                return getattr(instance, name)
+            return default
+
+        t1i, t1f = val("turno1_inicio"), val("turno1_fin")
+        if t1i and t1f and t1i >= t1f:
+            raise serializers.ValidationError(
+                {"turno1_fin": "La hora de fin del turno 1 debe ser posterior al inicio."}
+            )
+        if val("turno2_activo", True):
+            t2i, t2f = val("turno2_inicio"), val("turno2_fin")
+            if t2i and t2f and t2i >= t2f:
+                raise serializers.ValidationError(
+                    {
+                        "turno2_fin": "La hora de fin del turno 2 debe ser posterior al inicio."
+                    }
+                )
+        return attrs
 
 
 class ZonaDeliverySerializer(serializers.ModelSerializer):

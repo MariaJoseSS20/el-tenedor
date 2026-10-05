@@ -14,8 +14,9 @@ function money(n) {
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: "CLP",
+    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(Number(n) || 0);
+  }).format(Math.round(Number(n) || 0));
 }
 
 function calcularIvaIncluido(total) {

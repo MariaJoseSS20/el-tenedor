@@ -16,8 +16,7 @@ Reglas clave:
 
 """
 
-
-
+from datetime import time
 from decimal import Decimal
 
 
@@ -113,7 +112,7 @@ class Producto(models.Model):
         SHAWARMAS = "shawarmas", "Shawarmas"
 
         TABLAS = "tablas", "Tablas"
-
+        ROLLS = "rolls", "Arma tu Roll"
         GOHAN = "gohan", "Gohan"
 
         AGREGADOS = "agregados", "Agregados"
@@ -248,6 +247,95 @@ class ZonaDelivery(models.Model):
 
     def __str__(self):
         return f"{self.nombre} (${self.precio})"
+
+
+class HorarioPedidosWeb(models.Model):
+    """
+    Configuración única (pk=1) del horario de pedidos online.
+    Editable desde el panel del administrador.
+    """
+
+    habilitado = models.BooleanField(
+        default=True,
+        help_text="Si está apagado, no se reciben pedidos web aunque esté en horario.",
+    )
+    lunes = models.BooleanField(default=True)
+    martes = models.BooleanField(default=True)
+    miercoles = models.BooleanField(default=True)
+    jueves = models.BooleanField(default=True)
+    viernes = models.BooleanField(default=True)
+    sabado = models.BooleanField(default=True)
+    domingo = models.BooleanField(default=False)
+    turno1_inicio = models.TimeField(default=time(12, 0))
+    turno1_fin = models.TimeField(default=time(15, 45))
+    turno2_activo = models.BooleanField(default=True)
+    turno2_inicio = models.TimeField(default=time(18, 0))
+    turno2_fin = models.TimeField(default=time(22, 45))
+    texto_horario = models.CharField(
+        max_length=200,
+        default="Lunes a sábado: 12:00–15:45 y 18:00–22:45",
+        help_text="Texto corto que se muestra en la carta.",
+    )
+    mensaje_cerrado = models.TextField(
+        default=(
+            "Ahora no recibimos pedidos online. "
+            "Horario: lunes a sábado de 12:00 a 15:45 y de 18:00 a 22:45."
+        ),
+        help_text="Mensaje cuando está cerrado o deshabilitado.",
+    )
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "horario de pedidos web"
+        verbose_name_plural = "horario de pedidos web"
+
+    def __str__(self):
+        return "Horario de pedidos web"
+
+    def clean(self):
+        if self.turno1_inicio >= self.turno1_fin:
+            raise ValidationError(
+                {"turno1_fin": "La hora de fin del turno 1 debe ser posterior al inicio."}
+            )
+        if self.turno2_activo:
+            if self.turno2_inicio >= self.turno2_fin:
+                raise ValidationError(
+                    {
+                        "turno2_fin": "La hora de fin del turno 2 debe ser posterior al inicio."
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def dias_abiertos(self):
+        """weekday() lunes=0 … domingo=6 → set de días activos."""
+        flags = (
+            self.lunes,
+            self.martes,
+            self.miercoles,
+            self.jueves,
+            self.viernes,
+            self.sabado,
+            self.domingo,
+        )
+        return {i for i, on in enumerate(flags) if on}
+
+    def ventanas_minutos(self):
+        def a_mins(t):
+            return t.hour * 60 + t.minute
+
+        ventanas = [(a_mins(self.turno1_inicio), a_mins(self.turno1_fin))]
+        if self.turno2_activo:
+            ventanas.append((a_mins(self.turno2_inicio), a_mins(self.turno2_fin)))
+        return ventanas
 
 
 class Venta(models.Model):

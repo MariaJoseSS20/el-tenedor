@@ -8,6 +8,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CajaDiariaViewSet,
     CartaView,
+    HorarioPedidosConfigView,
+    HorarioPedidosView,
     InventarioViewSet,
     MeView,
     PedidoRetornoView,
@@ -31,6 +33,12 @@ router.register(r"zonas-delivery", ZonaDeliveryViewSet, basename="zona-delivery"
 urlpatterns = [
     path("me/", MeView.as_view(), name="me"),
     path("carta/", CartaView.as_view(), name="carta"),
+    path("horario-pedidos/", HorarioPedidosView.as_view(), name="horario-pedidos"),
+    path(
+        "horario-pedidos/config/",
+        HorarioPedidosConfigView.as_view(),
+        name="horario-pedidos-config",
+    ),
     path(
         "zonas-delivery/publicas/",
         ZonasDeliveryPublicasView.as_view(),

@@ -12,6 +12,8 @@ import { escapeHtml } from "./dom.js";
 import { syncPendingSales, watchConnectivity } from "./sync.js";
 import { esTabla, labelRoll, rollsDeTabla } from "./tablas.js";
 import {
+  MASAS_SHAWARMA,
+  MASA_DEFAULT,
   SALSAS_SHAWARMA,
   PRECIO_SALSA_EXTRA,
   esShawarma,
@@ -20,6 +22,38 @@ import {
   parseIngredientesShawarma,
   precioUnitarioShawarma,
 } from "./shawarmas.js";
+import {
+  ACOMP_QUESO,
+  PRECIO_SALSA_EXTRA_ROLL,
+  RELLENOS_ROLL,
+  SALSAS_ROLL,
+  VEGETALES_ROLL,
+  emptySalsasRollState,
+  emptyToppingsState,
+  envolturasDisponibles,
+  esProductoOcultoRoll,
+  labelRollArmado,
+  precioUnitarioRoll,
+  rollConfigCompleta,
+  salsasSeleccionadasRoll,
+  tarjetaArmaTuRoll,
+  toppingsDisponibles,
+  toppingsSeleccionados,
+} from "./rolls.js";
+import {
+  ESPOLVOREADOS_GOHAN,
+  NOMBRE_FURAY,
+  PROTEINAS_GOHAN,
+  VEGETALES_GOHAN,
+  emptyGohanConfig,
+  esGohan,
+  esProductoOcultoGohan,
+  gohanConfigCompleta,
+  labelGohanArmado,
+  precioUnitarioGohan,
+  productoFuray,
+  productoGohan,
+} from "./gohan.js";
 import {
   cerrarVentanasImpresion,
   imprimirComandaCocina,
@@ -44,6 +78,10 @@ const state = {
   tablaConfig: null,
   /** Configurador shawarma: { producto, ings, eligeProteina, proteina, salsas, cantidad } */
   shawarmaConfig: null,
+  /** Configurador Arma tu Roll */
+  rollConfig: null,
+  /** Configurador Arma tu Gohan */
+  gohanConfig: null,
   /** Modal agregar ítem simple: { producto, cantidad, nota } */
   addModal: null,
   metodo_pago: "efectivo",
@@ -63,6 +101,16 @@ tipo_entrega: "retiro",
   /** Formulario del modal de Delivery. */
   zonaForm: emptyZonaForm(),
   zonaModalOpen: false,
+  /** Formulario modal de productos de la carta (admin). */
+  productoForm: emptyProductoForm(),
+  productoModalOpen: false,
+  cartaFiltro: "todas",
+  cartaBusqueda: "",
+  /** Configuración de horario de pedidos web (admin). */
+  horarioForm: null,
+  horarioError: "",
+  horarioLoaded: false,
+  horarioSaving: false,
   /** Dirección obligatoria si la entrega es delivery. */
   direccion_delivery: "",
   /** Nota general del pedido (cliente / cocina). */
@@ -90,6 +138,17 @@ tipo_entrega: "retiro",
 
 function emptyZonaForm() {
   return { id: null, nombre: "", descripcion: "", precio: "" };
+}
+
+function emptyProductoForm() {
+  return {
+    id: null,
+    nombre: "",
+    descripcion: "",
+    precio: "",
+    categoria: "picoteo",
+    estado: "activo",
+  };
 }
 
 function zonasActivas() {
@@ -131,10 +190,44 @@ const CATEGORIAS = [
   ["papas", "Papas"],
   ["shawarmas", "Shawarmas"],
   ["tablas", "Tablas"],
-  ["gohan", "Gohan"],
+  ["rolls", "Arma tu Roll"],
+  ["gohan", "Arma tu Gohan"],
   ["bebestibles", "Bebestibles"],
+];
+
+/** Incluye agregados solo para editar extras internos (salsa, toppings…), no como sección de venta. */
+const CATEGORIAS_PRODUCTO = [
+  ...CATEGORIAS.filter(([id]) => id !== "todas"),
   ["agregados", "Agregados"],
 ];
+
+function labelCategoria(id) {
+  return (
+    CATEGORIAS.find(([cid]) => cid === id)?.[1] ||
+    CATEGORIAS_PRODUCTO.find(([cid]) => cid === id)?.[1] ||
+    id ||
+    "—"
+  );
+}
+
+function productosParaCarta() {
+  const base = state.productos.filter(
+    (p) =>
+      p.estado === "activo" &&
+      p.categoria !== "agregados" &&
+      !esProductoOcultoRoll(p) &&
+      !esProductoOcultoGohan(p)
+  );
+  const card = tarjetaArmaTuRoll(state.productos);
+  if (!card) return base;
+  const idxTablas = base.findIndex((p) => p.categoria === "tablas");
+  const insertAt =
+    idxTablas === -1
+      ? base.length
+      : base.findIndex((p, i) => i > idxTablas && p.categoria !== "tablas");
+  const at = insertAt === -1 ? base.length : insertAt;
+  return [...base.slice(0, at), card, ...base.slice(at)];
+}
 
 function brandLockup(compact = false) {
   if (compact) {
@@ -159,8 +252,23 @@ function money(n) {
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: "CLP",
+    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(Number(n) || 0);
+  }).format(Math.round(Number(n) || 0));
+}
+
+/** Entero CLP para inputs (evita 5000,00 del Decimal de la API). */
+function precioInputClp(n) {
+  if (n === "" || n == null) return "";
+  const v = Math.round(Number(n));
+  return Number.isFinite(v) ? String(v) : "";
+}
+
+let toastTimer = null;
+
+/** Precio arriba del modal: solo unidad; el total va en el botón. */
+function precioModalHeader(unit, extra = "") {
+  return `${money(unit)}${extra}`;
 }
 
 function formatFecha(fecha) {
@@ -176,10 +284,17 @@ function formatFecha(fecha) {
 
 function toast(msg, isError = false) {
   state.toast = { msg, isError };
-  render();
-  setTimeout(() => {
+  const existing = document.getElementById("pos-toast");
+  existing?.remove();
+  const el = document.createElement("div");
+  el.id = "pos-toast";
+  el.className = `toast ${isError ? "error" : ""}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.remove();
     state.toast = null;
-    render();
   }, 3200);
 }
 
@@ -339,7 +454,9 @@ function shell(content) {
           isAdmin
             ? `
           <button data-view="inventario" class="${state.view === "inventario" ? "active" : ""}">Inventario</button>
+          <button data-view="carta" class="${state.view === "carta" ? "active" : ""}">Carta</button>
           <button data-view="delivery" class="${state.view === "delivery" ? "active" : ""}">Delivery</button>
+          <button data-view="horario" class="${state.view === "horario" ? "active" : ""}">Horario</button>
           <button data-view="caja" class="${state.view === "caja" ? "active" : ""}">Caja</button>
           <button data-view="reportes" class="${state.view === "reportes" ? "active" : ""}">Reportes</button>
         `
@@ -347,11 +464,6 @@ function shell(content) {
         }
       </nav>
       <main class="main">${content}</main>
-      ${
-        state.toast
-          ? `<div class="toast ${state.toast.isError ? "error" : ""}">${escapeHtml(state.toast.msg)}</div>`
-          : ""
-      }
     </div>
   `;
 }
@@ -390,6 +502,16 @@ function renderCartLines() {
               : ""
           }
           ${
+            l.rollArmado
+              ? `<p class="cart-line-desc">${escapeHtml(l.rollArmado)}</p>`
+              : ""
+          }
+          ${
+            l.gohanArmado
+              ? `<p class="cart-line-desc">${escapeHtml(l.gohanArmado)}</p>`
+              : ""
+          }
+          ${
             l.rolls?.length
               ? `<ul class="cart-rolls">
                   ${l.rolls
@@ -406,6 +528,11 @@ function renderCartLines() {
           ${
             l.rolls_quitados?.length
               ? `<p class="cart-line-desc quitados">Sin: ${escapeHtml(l.rolls_quitados.join(" · "))}</p>`
+              : ""
+          }
+          ${
+            l.salsas?.length && (l.rolls?.length || l.categoria === "tablas")
+              ? `<p class="cart-line-desc">Salsas: ${escapeHtml(l.salsas.join(", "))}</p>`
               : ""
           }
           <div class="cart-line-meta">${money(l.precio)} c/u</div>
@@ -452,9 +579,11 @@ function renderCartCheckoutFields() {
             <option value="delivery" ${state.tipo_entrega === "delivery" ? "selected" : ""}>Delivery</option>
           </select>
         </div>
-        <div class="field ${state.tipo_entrega === "delivery" ? "" : "is-disabled"}">
+        ${
+          state.tipo_entrega === "delivery"
+            ? `<div class="field">
           <label for="zona_delivery">Zona delivery</label>
-          <select id="zona_delivery" ${state.tipo_entrega === "delivery" ? "" : "disabled"}>
+          <select id="zona_delivery">
             ${
               zonasActivas().length
                 ? zonasActivas()
@@ -466,7 +595,9 @@ function renderCartCheckoutFields() {
                 : `<option value="">${state.zonasError ? "No se pudieron cargar" : "Sin zonas configuradas"}</option>`
             }
           </select>
-        </div>
+        </div>`
+            : ""
+        }
       </div>
       ${state.metodo_pago === "Efectivo" || state.metodo_pago === "efectivo" ? `
         <div style="display: flex; gap: 12px; align-items: center; background: #f8f9fa; padding: 10px; border-radius: 8px; margin: 8px 0; border: 1px solid #e2e8f0;">
@@ -649,7 +780,10 @@ function syncShawarmaPrecio() {
   const cant = cfg.cantidad || 1;
   const el = document.getElementById("shawarma-precio");
   if (el) {
-    el.textContent = `${money(unit)} c/u${extras ? ` · incluye ${extras} salsa(s) extra` : ""} · total ${money(unit * cant)}`;
+    el.textContent = precioModalHeader(
+      unit,
+      extras ? ` · incluye ${extras} salsa(s) extra` : ""
+    );
   }
   const input = document.getElementById("shawarma-cantidad");
   if (input && Number(input.value) !== cant) input.value = String(cant);
@@ -705,9 +839,18 @@ function resetShawarmaConfigDefaults(cfg) {
     ing.incluido = true;
   });
   cfg.proteina = null;
+  cfg.masa = MASA_DEFAULT;
   cfg.salsas = Object.fromEntries(SALSAS_SHAWARMA.map((s) => [s, false]));
   cfg.salsas.Ajo = true;
   cfg.cantidad = 1;
+}
+
+function syncMasaUI() {
+  const cfg = state.shawarmaConfig;
+  if (!cfg) return;
+  document.querySelectorAll("[data-masa]").forEach((btn) => {
+    syncChoiceBox(btn, cfg.masa === btn.dataset.masa);
+  });
 }
 
 function hideConfirmSalsa() {
@@ -719,6 +862,396 @@ function cerrarShawarmaModal() {
   hideConfirmSalsa();
   state.shawarmaConfig = null;
   render();
+}
+
+function abrirRollModal() {
+  const envOpts = envolturasDisponibles(state.productos);
+  if (!envOpts.length) {
+    toast("Falta cargar Arma tu Roll. Ejecuta seed_menu.", true);
+    return;
+  }
+  state.rollConfig = {
+    envoltura: null,
+    relleno: null,
+    acompanamientoTipo: null,
+    vegetal: null,
+    toppings: emptyToppingsState(),
+    salsas: emptySalsasRollState(),
+    cantidad: 1,
+  };
+  state.tablaConfig = null;
+  state.shawarmaConfig = null;
+  state.confirmSalsa = null;
+  state.addModal = null;
+  state.cartOpen = false;
+  render();
+}
+
+function cerrarRollModal() {
+  state.rollConfig = null;
+  render();
+}
+
+function rollModalSnapshot(cfg) {
+  const envOpts = envolturasDisponibles(state.productos);
+  const topOpts = toppingsDisponibles(state.productos);
+  const envSel = envOpts.find((e) => e.env === cfg.envoltura) || null;
+  const tops = toppingsSeleccionados(cfg.toppings, topOpts);
+  const salsas = salsasSeleccionadasRoll(cfg.salsas);
+  const unit = precioUnitarioRoll({
+    precioEnvoltura: envSel?.precio || 0,
+    toppings: tops,
+    salsas,
+  });
+  return { envOpts, topOpts, envSel, tops, salsas, unit, cant: cfg.cantidad || 1 };
+}
+
+function syncRollModalUI() {
+  const cfg = state.rollConfig;
+  if (!cfg) return;
+  const { unit, cant, salsas } = rollModalSnapshot(cfg);
+  const precioEl = document.getElementById("roll-precio");
+  if (precioEl) {
+    precioEl.textContent = precioModalHeader(
+      unit,
+      salsas.length ? ` · ${salsas.length} salsa(s)` : ""
+    );
+  }
+  const input = document.getElementById("roll-cantidad");
+  if (input) input.value = String(cant);
+  document.querySelectorAll("[data-roll-env]").forEach((btn) => {
+    const on = btn.dataset.rollEnv === cfg.envoltura;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll("[data-roll-relleno]").forEach((btn) => {
+    const on = btn.dataset.rollRelleno === cfg.relleno;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll("[data-roll-acomp]").forEach((btn) => {
+    const tipo = btn.dataset.rollAcomp;
+    const on =
+      (tipo === "queso" && cfg.acompanamientoTipo === "queso") ||
+      (tipo === "vegetal" &&
+        cfg.acompanamientoTipo === "vegetal" &&
+        cfg.vegetal === btn.dataset.rollVegetal);
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll("[data-roll-topping]").forEach((btn) => {
+    const on = Boolean(cfg.toppings[btn.dataset.rollTopping]);
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll("[data-roll-salsa]").forEach((btn) => {
+    const on = Boolean(cfg.salsas[btn.dataset.rollSalsa]);
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  const confirm = document.getElementById("btn-roll-confirmar");
+  if (confirm) confirm.disabled = !rollConfigCompleta(cfg);
+}
+
+function renderRollModal() {
+  const cfg = state.rollConfig;
+  if (!cfg) return "";
+  const { envOpts, topOpts, unit, cant, salsas } = rollModalSnapshot(cfg);
+  const completa = rollConfigCompleta(cfg);
+  return `
+    <div class="pedido-overlay" id="roll-overlay" role="dialog" aria-modal="true">
+      <div class="pedido-modal tabla-modal">
+        <header class="pedido-modal-head">
+          <div>
+            <p class="pedido-kicker">Arma tu Roll</p>
+            <h2>Personalizar roll</h2>
+            <p class="tabla-precio" id="roll-precio">${precioModalHeader(
+              unit,
+              salsas.length ? ` · ${salsas.length} salsa(s)` : ""
+            )}</p>
+          </div>
+          <button type="button" class="modal-x" id="btn-cerrar-roll" aria-label="Cerrar">×</button>
+        </header>
+        <div class="pedido-modal-body">
+          <div class="opt-block">
+            <p class="tabla-hint">Elige tu envoltura</p>
+            <div class="shawarma-ings">
+              ${envOpts
+                .map(
+                  (e) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.envoltura === e.env ? "is-on" : ""
+                }" data-roll-env="${escapeHtml(e.env)}" aria-pressed="${
+                  cfg.envoltura === e.env
+                }">${escapeHtml(e.env)} · ${money(e.precio)}</button>`
+                )
+                .join("")}
+            </div>
+          </div>
+          <div class="opt-block">
+            <p class="tabla-hint">Elige carne o vegetal</p>
+            <div class="shawarma-ings">
+              ${RELLENOS_ROLL.map(
+                (r) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.relleno === r ? "is-on" : ""
+                }" data-roll-relleno="${escapeHtml(r)}" aria-pressed="${
+                  cfg.relleno === r
+                }">${escapeHtml(r)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <div class="opt-block">
+            <p class="tabla-hint">Elige acompañamiento</p>
+            <div class="shawarma-ings">
+              <button type="button" class="salsa-chip ${
+                cfg.acompanamientoTipo === "queso" ? "is-on" : ""
+              }" data-roll-acomp="queso" aria-pressed="${
+                cfg.acompanamientoTipo === "queso"
+              }">${escapeHtml(ACOMP_QUESO)}</button>
+              ${VEGETALES_ROLL.map(
+                (v) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.acompanamientoTipo === "vegetal" && cfg.vegetal === v
+                    ? "is-on"
+                    : ""
+                }" data-roll-acomp="vegetal" data-roll-vegetal="${escapeHtml(
+                  v
+                )}" aria-pressed="${
+                  cfg.acompanamientoTipo === "vegetal" && cfg.vegetal === v
+                }">${escapeHtml(v)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          ${
+            topOpts.length
+              ? `<div class="opt-block">
+            <p class="tabla-hint">Agrega en topping</p>
+            <div class="shawarma-ings">
+              ${topOpts
+                .map(
+                  (t) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.toppings[t.key] ? "is-on" : ""
+                }" data-roll-topping="${escapeHtml(t.key)}" aria-pressed="${Boolean(
+                  cfg.toppings[t.key]
+                )}">${escapeHtml(t.label)} · +${money(t.precio)}</button>`
+                )
+                .join("")}
+            </div>
+          </div>`
+              : ""
+          }
+          <div class="opt-block">
+            <p class="tabla-hint">Salsas extras · ${money(PRECIO_SALSA_EXTRA_ROLL)} c/u</p>
+            <div class="shawarma-ings">
+              ${SALSAS_ROLL.map(
+                (s) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.salsas[s] ? "is-on" : ""
+                }" data-roll-salsa="${escapeHtml(s)}" aria-pressed="${Boolean(
+                  cfg.salsas[s]
+                )}">${escapeHtml(s)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <label class="add-qty-label" for="roll-cantidad">Cantidad</label>
+          <div class="add-qty-row">
+            <div class="add-qty">
+              <button type="button" id="btn-roll-dec" aria-label="Menos">−</button>
+              <input id="roll-cantidad" type="number" min="1" step="1" value="${cant}" />
+              <button type="button" id="btn-roll-inc" aria-label="Más">+</button>
+            </div>
+            <button type="button" class="btn btn-add" id="btn-roll-confirmar" ${
+              completa ? "" : "disabled"
+            }>Agregar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function abrirGohanModal() {
+  const p = productoGohan(state.productos);
+  if (!p) {
+    toast("Falta el producto Gohan. Ejecuta seed_menu.", true);
+    return;
+  }
+  state.gohanConfig = { ...emptyGohanConfig(), producto: p };
+  state.tablaConfig = null;
+  state.shawarmaConfig = null;
+  state.rollConfig = null;
+  state.confirmSalsa = null;
+  state.addModal = null;
+  state.cartOpen = false;
+  render();
+}
+
+function cerrarGohanModal() {
+  state.gohanConfig = null;
+  render();
+}
+
+function gohanModalSnapshot(cfg) {
+  const p = cfg.producto || productoGohan(state.productos);
+  const furay = productoFuray(state.productos);
+  const precioFuray = furay ? Number(furay.precio) || 0 : 0;
+  const unit = precioUnitarioGohan(p?.precio, cfg.furay, precioFuray);
+  return { p, furay, precioFuray, unit, cant: cfg.cantidad || 1 };
+}
+
+function syncGohanModalUI() {
+  const cfg = state.gohanConfig;
+  if (!cfg) return;
+  const { unit, cant, precioFuray } = gohanModalSnapshot(cfg);
+  const precioEl = document.getElementById("gohan-precio");
+  if (precioEl) {
+    precioEl.textContent = precioModalHeader(
+      unit,
+      cfg.furay ? ` · incluye furay ${money(precioFuray)}` : ""
+    );
+  }
+  const input = document.getElementById("gohan-cantidad");
+  if (input) input.value = String(cant);
+  document.querySelectorAll("[data-gohan-espol]").forEach((btn) => {
+    const on = btn.dataset.gohanEspol === cfg.espolvoreado;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll("[data-gohan-proteina]").forEach((btn) => {
+    const on = btn.dataset.gohanProteina === cfg.proteina;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  const furayBtn = document.getElementById("btn-gohan-furay");
+  if (furayBtn) {
+    furayBtn.classList.toggle("is-on", Boolean(cfg.furay));
+    furayBtn.setAttribute("aria-pressed", String(Boolean(cfg.furay)));
+  }
+  document.querySelectorAll("[data-gohan-veg]").forEach((btn) => {
+    const on = (cfg.vegetales || []).includes(btn.dataset.gohanVeg);
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  const vegCount = (cfg.vegetales || []).length;
+  const vegHint = document.getElementById("gohan-veg-hint");
+  if (vegHint) vegHint.textContent = vegCount ? ` · ${vegCount}/2` : "";
+  if (!cfg.vegError) clearGohanVegError();
+  const confirm = document.getElementById("btn-gohan-confirmar");
+  if (confirm) confirm.disabled = !gohanConfigCompleta(cfg);
+}
+
+function showGohanVegError(msg) {
+  if (state.gohanConfig) state.gohanConfig.vegError = msg;
+  const err = document.getElementById("gohan-veg-error");
+  if (err) {
+    err.hidden = false;
+    err.textContent = msg;
+  }
+}
+
+function clearGohanVegError() {
+  if (state.gohanConfig) state.gohanConfig.vegError = null;
+  const err = document.getElementById("gohan-veg-error");
+  if (err) {
+    err.hidden = true;
+    err.textContent = "";
+  }
+}
+
+function renderGohanModal() {
+  const cfg = state.gohanConfig;
+  if (!cfg) return "";
+  const { unit, cant, precioFuray, furay } = gohanModalSnapshot(cfg);
+  const completa = gohanConfigCompleta(cfg);
+  const vegCount = (cfg.vegetales || []).length;
+  return `
+    <div class="pedido-overlay" id="gohan-overlay" role="dialog" aria-modal="true">
+      <div class="pedido-modal tabla-modal">
+        <header class="pedido-modal-head">
+          <div>
+            <p class="pedido-kicker">Arma tu Gohan</p>
+            <h2>Personalizar gohan</h2>
+            <p class="tabla-precio" id="gohan-precio">${precioModalHeader(
+              unit,
+              cfg.furay ? ` · incluye furay ${money(precioFuray)}` : ""
+            )}</p>
+          </div>
+          <button type="button" class="modal-x" id="btn-cerrar-gohan" aria-label="Cerrar">×</button>
+        </header>
+        <div class="pedido-modal-body">
+          <p class="tabla-hint">Incluye arroz, queso phila, salsa y espolvoreado</p>
+          <div class="opt-block">
+            <p class="tabla-hint">Elige tu espolvoreado</p>
+            <div class="shawarma-ings">
+              ${ESPOLVOREADOS_GOHAN.map(
+                (e) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.espolvoreado === e ? "is-on" : ""
+                }" data-gohan-espol="${escapeHtml(e)}" aria-pressed="${
+                  cfg.espolvoreado === e
+                }">${escapeHtml(e)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <div class="opt-block">
+            <p class="tabla-hint">Elige proteína o vegetal</p>
+            <div class="shawarma-ings">
+              ${PROTEINAS_GOHAN.map(
+                (r) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.proteina === r ? "is-on" : ""
+                }" data-gohan-proteina="${escapeHtml(r)}" aria-pressed="${
+                  cfg.proteina === r
+                }">${escapeHtml(r)}</button>`
+              ).join("")}
+            </div>
+            ${
+              furay
+                ? `<div class="shawarma-ings" style="margin-top:8px">
+                <button type="button" class="salsa-chip ${
+                  cfg.furay ? "is-on" : ""
+                }" id="btn-gohan-furay" aria-pressed="${Boolean(cfg.furay)}">
+                  Furay · +${money(precioFuray)}
+                </button>
+              </div>`
+                : ""
+            }
+          </div>
+          <div class="opt-block">
+            <p class="tabla-hint" id="gohan-veg-label">Elige 2 vegetales<span id="gohan-veg-hint">${
+              vegCount ? ` · ${vegCount}/2` : ""
+            }</span></p>
+            <p class="tabla-hint is-error" id="gohan-veg-error" ${
+              cfg.vegError ? "" : "hidden"
+            }>${cfg.vegError ? escapeHtml(cfg.vegError) : ""}</p>
+            <div class="shawarma-ings">
+              ${VEGETALES_GOHAN.map(
+                (v) => `
+                <button type="button" class="salsa-chip ${
+                  (cfg.vegetales || []).includes(v) ? "is-on" : ""
+                }" data-gohan-veg="${escapeHtml(v)}" aria-pressed="${
+                  (cfg.vegetales || []).includes(v)
+                }">${escapeHtml(v)}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <label class="add-qty-label" for="gohan-cantidad">Cantidad</label>
+          <div class="add-qty-row">
+            <div class="add-qty">
+              <button type="button" id="btn-gohan-dec" aria-label="Menos">−</button>
+              <input id="gohan-cantidad" type="number" min="1" step="1" value="${cant}" />
+              <button type="button" id="btn-gohan-inc" aria-label="Más">+</button>
+            </div>
+            <button type="button" class="btn btn-add" id="btn-gohan-confirmar" ${
+              completa ? "" : "disabled"
+            }>Agregar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function showConfirmSalsa(salsa) {
@@ -758,11 +1291,39 @@ function renderShawarmaModal() {
           <div>
             <p class="pedido-kicker">Personalizar shawarma</p>
             <h2>${escapeHtml(p.nombre)}</h2>
-            <p class="tabla-precio" id="shawarma-precio">${money(unit)} c/u${extras ? ` · incluye ${extras} salsa(s) extra` : ""} · total ${money(unit * cant)}</p>
+            <p class="tabla-precio" id="shawarma-precio">${precioModalHeader(
+              unit,
+              extras ? ` · incluye ${extras} salsa(s) extra` : ""
+            )}</p>
           </div>
           <button type="button" class="modal-x" id="btn-cerrar-shawarma" aria-label="Cerrar">×</button>
         </header>
         <div class="pedido-modal-body">
+          <div class="opt-block">
+            <p class="tabla-hint"><strong>Masa</strong> (elige una)</p>
+            <div class="opt-row-plain">
+              ${MASAS_SHAWARMA.map(
+                (m, i) => `
+                ${i ? `<span class="opt-sep" aria-hidden="true">·</span>` : ""}
+                <button type="button" class="opt-plain opt-choice ${
+                  (cfg.masa || MASA_DEFAULT) === m.id ? "is-on" : ""
+                }" data-masa="${escapeHtml(m.id)}" role="checkbox" aria-checked="${
+                  (cfg.masa || MASA_DEFAULT) === m.id ? "true" : "false"
+                }">
+                  <span class="opt-box" aria-hidden="true">${
+                    (cfg.masa || MASA_DEFAULT) === m.id ? "✓" : ""
+                  }</span>
+                  ${escapeHtml(m.label)}${
+                    m.detalle
+                      ? ` <span class="tabla-hint" style="display:inline;margin:0">(${escapeHtml(
+                          m.detalle
+                        )})</span>`
+                      : ""
+                  }
+                </button>`
+              ).join("")}
+            </div>
+          </div>
           ${
             cfg.eligeProteina
               ? `
@@ -867,6 +1428,9 @@ function renderTablaModal() {
   const cfg = state.tablaConfig;
   if (!cfg) return "";
   const p = cfg.producto;
+  const salsas = salsasSeleccionadasRoll(cfg.salsas);
+  const unit =
+    Number(p.precio) + salsas.length * PRECIO_SALSA_EXTRA_ROLL;
 
   return `
     <div class="pedido-overlay" id="tabla-overlay" role="dialog" aria-modal="true">
@@ -875,7 +1439,10 @@ function renderTablaModal() {
           <div>
             <p class="pedido-kicker">Personalizar tabla</p>
             <h2>${escapeHtml(p.nombre)}</h2>
-            <p class="tabla-precio">${money(p.precio)}</p>
+            <p class="tabla-precio" id="tabla-precio">${precioModalHeader(
+              unit,
+              salsas.length ? ` · ${salsas.length} salsa(s)` : ""
+            )}</p>
           </div>
           <button type="button" class="modal-x" id="btn-cerrar-tabla" aria-label="Cerrar">×</button>
         </header>
@@ -884,16 +1451,50 @@ function renderTablaModal() {
           <ul class="tabla-rolls-list">
             ${renderTablaRollsList(cfg.rolls)}
           </ul>
+          <div class="opt-block" style="margin-top:16px">
+            <p class="tabla-hint">Salsas · ${money(PRECIO_SALSA_EXTRA_ROLL)} c/u</p>
+            <div class="shawarma-ings">
+              ${SALSAS_ROLL.map(
+                (s) => `
+                <button type="button" class="salsa-chip ${
+                  cfg.salsas?.[s] ? "is-on" : ""
+                }" data-tabla-salsa="${escapeHtml(s)}" aria-pressed="${Boolean(
+                  cfg.salsas?.[s]
+                )}">${escapeHtml(s)}</button>`
+              ).join("")}
+            </div>
+          </div>
         </div>
         <footer class="pedido-modal-foot">
           <button type="button" class="btn btn-ghost" id="btn-tabla-todos">Restablecer ingredientes</button>
           <button type="button" class="btn btn-add" id="btn-tabla-confirmar">
-            Agregar
+            Agregar · ${money(unit)}
           </button>
         </footer>
       </div>
     </div>
   `;
+}
+
+function syncTablaSalsaUI() {
+  const cfg = state.tablaConfig;
+  if (!cfg) return;
+  const salsas = salsasSeleccionadasRoll(cfg.salsas);
+  const unit = Number(cfg.producto.precio) + salsas.length * PRECIO_SALSA_EXTRA_ROLL;
+  const precioEl = document.getElementById("tabla-precio");
+  if (precioEl) {
+    precioEl.textContent = precioModalHeader(
+      unit,
+      salsas.length ? ` · ${salsas.length} salsa(s)` : ""
+    );
+  }
+  document.querySelectorAll("[data-tabla-salsa]").forEach((btn) => {
+    const on = Boolean(cfg.salsas?.[btn.dataset.tablaSalsa]);
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  const confirm = document.getElementById("btn-tabla-confirmar");
+  if (confirm) confirm.textContent = `Agregar · ${money(unit)}`;
 }
 
 function renderPedidoModal() {
@@ -961,7 +1562,7 @@ function renderAddModal() {
 }
 
 function renderPos() {
-  const activos = state.productos.filter((p) => p.estado === "activo");
+  const activos = productosParaCarta();
   const filtered =
     state.categoria === "todas"
       ? activos
@@ -983,12 +1584,12 @@ function renderPos() {
               (p) => `
             <article class="product">
               <div>
-                <div class="cat">${escapeHtml(p.categoria)}</div>
-                <h3>${escapeHtml(p.nombre)}</h3>
+                <div class="cat">${escapeHtml(esGohan(p) ? "Arma tu Gohan" : p.categoria)}</div>
+                <h3>${escapeHtml(esGohan(p) ? "Arma tu Gohan" : p.nombre)}</h3>
                 ${p.descripcion ? `<p class="desc">${escapeHtml(p.descripcion)}</p>` : ""}
               </div>
               <div class="product-foot">
-                <span class="price-tag">${money(p.precio)}</span>
+                <span class="price-tag">${p._virtualRoll ? `Desde ${money(p.precio)}` : money(p.precio)}</span>
                 <button type="button" class="btn-cart-add" data-add="${p.id}" aria-label="Agregar al pedido" title="Agregar al pedido">
                   <svg class="icon-cart" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="9" cy="20" r="1.4" fill="currentColor" stroke="none"/>
@@ -1022,6 +1623,8 @@ function renderPos() {
     ${renderPedidoModal()}
     ${renderTablaModal()}
     ${renderShawarmaModal()}
+    ${renderRollModal()}
+    ${renderGohanModal()}
     ${renderAddModal()}
     ${renderPostCobroModal()}
     ${renderConfirmSalsa()}
@@ -1701,8 +2304,10 @@ function renderZonaModal() {
               <input id="zona-descripcion" maxlength="200" value="${escapeHtml(f.descripcion)}" placeholder="Desde Tres Puentes a Barranco Amarillo" />
             </div>
             <div class="field">
-              <label for="zona-precio">Precio</label>
-              <input id="zona-precio" type="number" min="0" step="100" required value="${escapeHtml(String(f.precio ?? ""))}" placeholder="3500" />
+              <label for="zona-precio">Precio (CLP)</label>
+              <input id="zona-precio" type="number" min="0" step="1" inputmode="numeric" required value="${escapeHtml(
+                precioInputClp(f.precio)
+              )}" placeholder="3500" />
             </div>
           </div>
           <footer class="pedido-modal-foot row-actions" style="margin:0">
@@ -1712,6 +2317,160 @@ function renderZonaModal() {
         </form>
       </div>
     </div>
+  `;
+}
+
+function hhmm(t) {
+  if (!t) return "";
+  const s = String(t);
+  return s.length >= 5 ? s.slice(0, 5) : s;
+}
+
+function emptyHorarioForm() {
+  return {
+    habilitado: true,
+    lunes: true,
+    martes: true,
+    miercoles: true,
+    jueves: true,
+    viernes: true,
+    sabado: true,
+    domingo: false,
+    turno1_inicio: "12:00",
+    turno1_fin: "15:45",
+    turno2_activo: true,
+    turno2_inicio: "18:00",
+    turno2_fin: "22:45",
+    texto_horario: "Lunes a sábado: 12:00–15:45 y 18:00–22:45",
+    mensaje_cerrado:
+      "Ahora no recibimos pedidos online. Horario: lunes a sábado de 12:00 a 15:45 y de 18:00 a 22:45.",
+  };
+}
+
+function horarioFormFromApi(data) {
+  const base = emptyHorarioForm();
+  if (!data) return base;
+  return {
+    ...base,
+    ...data,
+    turno1_inicio: hhmm(data.turno1_inicio) || base.turno1_inicio,
+    turno1_fin: hhmm(data.turno1_fin) || base.turno1_fin,
+    turno2_inicio: hhmm(data.turno2_inicio) || base.turno2_inicio,
+    turno2_fin: hhmm(data.turno2_fin) || base.turno2_fin,
+  };
+}
+
+async function loadHorario() {
+  state.horarioError = "";
+  state.horarioLoaded = false;
+  try {
+    state.horarioForm = horarioFormFromApi(await api.horarioPedidosConfig());
+    state.horarioLoaded = true;
+  } catch (e) {
+    state.horarioForm = null;
+    state.horarioLoaded = false;
+    state.horarioError = e.message || "No se pudo cargar el horario";
+  }
+}
+
+function renderHorario() {
+  const f = state.horarioForm || emptyHorarioForm();
+  const puedeEditar = Boolean(state.horarioLoaded && state.horarioForm);
+  const dias = [
+    ["lunes", "Lun"],
+    ["martes", "Mar"],
+    ["miercoles", "Mié"],
+    ["jueves", "Jue"],
+    ["viernes", "Vie"],
+    ["sabado", "Sáb"],
+    ["domingo", "Dom"],
+  ];
+  const dis = puedeEditar ? "" : "disabled";
+  return `
+    <section class="panel">
+      <h2>Horario pedidos web</h2>
+      <p class="sub">Define cuándo la carta online acepta pedidos. La caja del local no se ve afectada.</p>
+      ${
+        state.horarioError
+          ? `<p class="cart-error" role="alert">${escapeHtml(state.horarioError)}</p>
+             <div class="row-actions" style="margin:0 0 12px">
+               <button class="btn btn-mint" type="button" id="btn-reintentar-horario" style="width:auto">Reintentar carga</button>
+             </div>`
+          : ""
+      }
+      <form id="form-horario" class="horario-form">
+        <label class="check-row">
+          <input type="checkbox" name="habilitado" ${f.habilitado ? "checked" : ""} ${dis} />
+          <span>Recibir pedidos online</span>
+        </label>
+        <p class="tabla-hint">Días abiertos</p>
+        <div class="horario-dias">
+          ${dias
+            .map(
+              ([key, label]) => `
+            <label class="check-chip">
+              <input type="checkbox" name="${key}" ${f[key] ? "checked" : ""} ${dis} />
+              <span>${label}</span>
+            </label>`
+            )
+            .join("")}
+        </div>
+        <div class="horario-turnos">
+          <fieldset>
+            <legend>Turno 1</legend>
+            <div class="horario-times">
+              <label>Desde <input type="time" name="turno1_inicio" value="${escapeHtml(
+                f.turno1_inicio
+              )}" required ${dis} /></label>
+              <label>Hasta <input type="time" name="turno1_fin" value="${escapeHtml(
+                f.turno1_fin
+              )}" required ${dis} /></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>
+              <label class="check-row" style="margin:0">
+                <input type="checkbox" name="turno2_activo" ${f.turno2_activo ? "checked" : ""} ${dis} />
+                <span>Turno 2</span>
+              </label>
+            </legend>
+            <div class="horario-times">
+              <label>Desde <input type="time" name="turno2_inicio" value="${escapeHtml(
+                f.turno2_inicio
+              )}" ${f.turno2_activo && puedeEditar ? "required" : "disabled"} /></label>
+              <label>Hasta <input type="time" name="turno2_fin" value="${escapeHtml(
+                f.turno2_fin
+              )}" ${f.turno2_activo && puedeEditar ? "required" : "disabled"} /></label>
+            </div>
+          </fieldset>
+        </div>
+        <label class="field">
+          <span>Texto de horario (carta)</span>
+          <input type="text" name="texto_horario" maxlength="200" value="${escapeHtml(
+            f.texto_horario
+          )}" required ${dis} />
+        </label>
+        <label class="field">
+          <span>Mensaje cuando está cerrado</span>
+          <textarea name="mensaje_cerrado" rows="3" required ${dis}>${escapeHtml(
+            f.mensaje_cerrado
+          )}</textarea>
+        </label>
+        <div class="row-actions">
+          <button class="btn btn-primary" type="submit" id="btn-guardar-horario" ${
+            state.horarioSaving || !puedeEditar ? "disabled" : ""
+          } style="width:auto">
+            ${
+              state.horarioSaving
+                ? "Guardando…"
+                : !puedeEditar
+                  ? "Carga el horario para editar"
+                  : "Guardar horario"
+            }
+          </button>
+        </div>
+      </form>
+    </section>
   `;
 }
 
@@ -1964,6 +2723,166 @@ function renderCaja() {
     </section>
   `;
 }
+
+function cerrarProductoModal() {
+  state.productoModalOpen = false;
+  state.productoForm = emptyProductoForm();
+}
+
+function renderProductoModal() {
+  if (!state.productoModalOpen) return "";
+  const f = state.productoForm || emptyProductoForm();
+  const editando = Boolean(f.id);
+  return `
+    <div class="pedido-overlay" id="producto-overlay" role="dialog" aria-modal="true">
+      <div class="pedido-modal" style="max-width:480px">
+        <header class="pedido-modal-head">
+          <div>
+            <p class="pedido-kicker">Carta</p>
+            <h2>${editando ? "Editar producto" : "Agregar producto"}</h2>
+          </div>
+          <button type="button" class="modal-x" id="btn-cerrar-producto" aria-label="Cerrar">×</button>
+        </header>
+        <form id="form-producto">
+          <div class="pedido-modal-body">
+            <div class="field">
+              <label for="prod-nombre">Nombre</label>
+              <input id="prod-nombre" required maxlength="150" value="${escapeHtml(f.nombre)}" placeholder="Ej. Gyozas (5u)" />
+            </div>
+            <div class="field">
+              <label for="prod-descripcion">Descripción</label>
+              <textarea id="prod-descripcion" rows="2" maxlength="500" placeholder="Opcional">${escapeHtml(
+                f.descripcion || ""
+              )}</textarea>
+            </div>
+            <div class="horario-times">
+              <div class="field" style="margin:0">
+                <label for="prod-precio">Precio (CLP)</label>
+                <input id="prod-precio" type="number" min="1" step="1" inputmode="numeric" required value="${escapeHtml(
+                  precioInputClp(f.precio)
+                )}" placeholder="5000" />
+              </div>
+              <div class="field" style="margin:0">
+                <label for="prod-categoria">Categoría</label>
+                <select id="prod-categoria" required>
+                  ${CATEGORIAS_PRODUCTO.map(
+                    ([id, label]) =>
+                      `<option value="${id}" ${f.categoria === id ? "selected" : ""}>${escapeHtml(
+                        label
+                      )}</option>`
+                  ).join("")}
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="prod-estado">Estado</label>
+              <select id="prod-estado">
+                <option value="activo" ${f.estado === "activo" ? "selected" : ""}>Activo (visible en carta)</option>
+                <option value="inactivo" ${f.estado === "inactivo" ? "selected" : ""}>Inactivo (oculto)</option>
+              </select>
+            </div>
+          </div>
+          <footer class="pedido-modal-foot row-actions" style="margin:0">
+            <button class="btn btn-primary" type="submit" style="width:auto">${
+              editando ? "Guardar cambios" : "Agregar"
+            }</button>
+            <button class="btn btn-ghost" type="button" id="btn-cancelar-producto" style="width:auto">Cancelar</button>
+          </footer>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function productosCartaAdmin() {
+  const q = state.cartaBusqueda.trim().toLowerCase();
+  return (state.productos || [])
+    .filter((p) => {
+      if (state.cartaFiltro !== "todas" && p.categoria !== state.cartaFiltro) return false;
+      if (!q) return true;
+      return (
+        String(p.nombre || "").toLowerCase().includes(q) ||
+        String(p.descripcion || "").toLowerCase().includes(q)
+      );
+    })
+    .slice()
+    .sort((a, b) => {
+      if (a.estado !== b.estado) return a.estado === "activo" ? -1 : 1;
+      return String(a.nombre).localeCompare(String(b.nombre), "es");
+    });
+}
+
+function renderCartaAdmin() {
+  const lista = productosCartaAdmin();
+  const rows = lista
+    .map(
+      (p) => `
+      <tr class="${p.estado !== "activo" ? "is-muted-row" : ""}">
+        <td>${escapeHtml(p.nombre)}</td>
+        <td>${escapeHtml(labelCategoria(p.categoria))}</td>
+        <td>${money(p.precio)}</td>
+        <td>${p.estado === "activo" ? "Activo" : "Inactivo"}</td>
+        <td class="zona-actions">
+          <div class="kebab">
+            <button class="kebab-btn" type="button" data-prod-menu aria-label="Opciones de ${escapeHtml(
+              p.nombre
+            )}" aria-expanded="false" aria-haspopup="menu">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+            <div class="kebab-menu" role="menu" hidden>
+              <button type="button" role="menuitem" data-editar-prod="${p.id}">
+                Editar
+              </button>
+              ${
+                p.estado === "activo"
+                  ? `<button type="button" role="menuitem" class="is-danger" data-desactivar-prod="${p.id}">Desactivar</button>`
+                  : `<button type="button" role="menuitem" data-activar-prod="${p.id}">Activar</button>`
+              }
+            </div>
+          </div>
+        </td>
+      </tr>`
+    )
+    .join("");
+
+  return `
+    <section class="panel">
+      <h2>Carta</h2>
+      <p class="sub">Agrega, edita o desactiva productos. Lo inactivo no aparece en la caja ni en pedidos web.</p>
+      <div class="row-actions" style="margin-top:0;align-items:end;flex-wrap:wrap">
+        <div class="field" style="margin:0;min-width:180px">
+          <label for="carta-filtro">Categoría</label>
+          <select id="carta-filtro">
+            ${CATEGORIAS.map(
+              ([id, label]) =>
+                `<option value="${id}" ${state.cartaFiltro === id ? "selected" : ""}>${escapeHtml(
+                  label
+                )}</option>`
+            ).join("")}
+          </select>
+        </div>
+        <div class="field" style="margin:0;flex:1;min-width:180px">
+          <label for="carta-buscar">Buscar</label>
+          <input id="carta-buscar" type="search" placeholder="Nombre…" value="${escapeHtml(
+            state.cartaBusqueda
+          )}" />
+        </div>
+        <button class="btn btn-primary" type="button" id="btn-agregar-producto" style="width:auto">Agregar</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Producto</th><th>Categoría</th><th>Precio</th><th>Estado</th><th></th></tr></thead>
+          <tbody>${
+            rows ||
+            `<tr><td colspan="5" class="muted">No hay productos con ese filtro.</td></tr>`
+          }</tbody>
+        </table>
+      </div>
+    </section>
+    ${renderProductoModal()}
+  `;
+}
+
 function render() {
   if (!state.user || !getTokens()) {
     renderLogin();
@@ -1975,7 +2894,9 @@ function render() {
   if (state.view === "pedidos") content = renderPedidos();
   if (state.view === "ventas") content = renderVentas();
   if (state.view === "inventario") content = renderInventario();
+  if (state.view === "carta") content = renderCartaAdmin();
   if (state.view === "delivery") content = renderDelivery();
+  if (state.view === "horario") content = renderHorario();
   if (state.view === "caja") content = renderCaja();
   if (state.view === "reportes") content = renderReportes();
 
@@ -2011,7 +2932,9 @@ function bindShell() {
           state.inventario = await api.inventario();
           state.productos = await api.productos();
         }
+        if (state.view === "carta") state.productos = await api.productos();
         if (state.view === "delivery") await loadZonas();
+        if (state.view === "horario") await loadHorario();
         if (state.view === "caja") {
           state.cajaPreview = await api.cajaPreview();
 
@@ -2069,7 +2992,12 @@ function bindShell() {
 
   document.querySelectorAll("[data-add]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const id = Number(btn.dataset.add);
+      const rawId = btn.dataset.add;
+      if (rawId === "arma-tu-roll") {
+        abrirRollModal();
+        return;
+      }
+      const id = Number(rawId);
       const p = state.productos.find((x) => x.id === id);
       if (!p) return;
 
@@ -2083,12 +3011,24 @@ function bindShell() {
             incluido: true,
           })),
         }));
-        state.tablaConfig = { producto: p, rolls, nota: "" };
+        state.tablaConfig = {
+          producto: p,
+          rolls,
+          nota: "",
+          salsas: emptySalsasRollState(),
+        };
         state.shawarmaConfig = null;
+        state.rollConfig = null;
+        state.gohanConfig = null;
         state.confirmSalsa = null;
         state.addModal = null;
         state.cartOpen = false;
         render();
+        return;
+      }
+
+      if (esGohan(p)) {
+        abrirGohanModal();
         return;
       }
 
@@ -2103,10 +3043,13 @@ function bindShell() {
           eligeProteina: parsed.eligeProteina,
           proteinaOpciones: parsed.proteinaOpciones,
           proteina: parsed.eligeProteina ? null : null,
+          masa: MASA_DEFAULT,
           salsas,
           cantidad: 1,
         };
         state.tablaConfig = null;
+        state.rollConfig = null;
+        state.gohanConfig = null;
         state.confirmSalsa = null;
         state.addModal = null;
         state.cartOpen = false;
@@ -2118,6 +3061,8 @@ function bindShell() {
       state.addModal = { producto: p, cantidad: 1, nota: "", conPalta: false };
       state.tablaConfig = null;
       state.shawarmaConfig = null;
+      state.rollConfig = null;
+      state.gohanConfig = null;
       state.cartOpen = false;
       render();
     });
@@ -2170,6 +3115,8 @@ function bindShell() {
         l.producto === p.id &&
         !l.rolls &&
         !l.shawarma &&
+        !l.rollArmado &&
+        !l.gohanArmado &&
         !l.nota &&
         Boolean(l.conPalta) === conPalta
     );
@@ -2222,10 +3169,24 @@ function bindShell() {
     });
     syncTablaIngsUI();
   });
+  document.querySelectorAll("[data-tabla-salsa]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.tablaConfig) return;
+      const salsa = btn.dataset.tablaSalsa;
+      state.tablaConfig.salsas = state.tablaConfig.salsas || emptySalsasRollState();
+      state.tablaConfig.salsas[salsa] = !state.tablaConfig.salsas[salsa];
+      syncTablaSalsaUI();
+    });
+  });
   document.getElementById("btn-tabla-confirmar")?.addEventListener("click", () => {
     const cfg = state.tablaConfig;
     if (!cfg) return;
     const p = cfg.producto;
+    const salsas = salsasSeleccionadasRoll(cfg.salsas);
+    if (salsas.length > 0 && !idSalsaExtra()) {
+      toast("Falta el producto «Salsa extra» en la carta. Ejecuta seed_menu.", true);
+      return;
+    }
     const rolls = cfg.rolls.map((roll) => {
       const incluidos = roll.ingredientes.filter((i) => i.incluido).map((i) => i.nombre);
       const quitados = roll.ingredientes.filter((i) => !i.incluido).map((i) => i.nombre);
@@ -2239,16 +3200,20 @@ function bindShell() {
     const resumen_quitados = rolls
       .filter((r) => r.quitados.length)
       .map((r) => `${r.env} sin ${r.quitados.join(", ")}`);
+    const unit = Number(p.precio) + salsas.length * PRECIO_SALSA_EXTRA_ROLL;
 
     state.cart.push({
       producto: p.id,
       nombre: p.nombre,
-      precio: Number(p.precio),
+      precio: unit,
+      precioBase: Number(p.precio),
       cantidad: 1,
       categoria: p.categoria,
       descripcion: p.descripcion || "",
       rolls,
       rolls_quitados: resumen_quitados,
+      salsas,
+      extrasSalsaRoll: salsas.length,
     });
     cerrarTablaModal();
   });
@@ -2332,10 +3297,18 @@ function bindShell() {
     state.shawarmaConfig.cantidad = Math.max(1, Number(e.target.value) || 1);
     syncShawarmaPrecio();
   });
+  document.querySelectorAll("[data-masa]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.shawarmaConfig) return;
+      state.shawarmaConfig.masa = btn.dataset.masa;
+      syncMasaUI();
+    });
+  });
   document.getElementById("btn-shawarma-reset")?.addEventListener("click", () => {
     if (!state.shawarmaConfig) return;
     hideConfirmSalsa();
     resetShawarmaConfigDefaults(state.shawarmaConfig);
+    syncMasaUI();
     syncShawarmaIngsUI();
     syncProteinaUI();
     syncSalsaUI();
@@ -2344,6 +3317,10 @@ function bindShell() {
     const cfg = state.shawarmaConfig;
     if (!cfg) return;
     const p = cfg.producto;
+    if (!cfg.masa) {
+      toast("Elige la masa", true);
+      return;
+    }
     if (cfg.eligeProteina && !cfg.proteina) {
       toast("Elige Carne o Pollo", true);
       return;
@@ -2373,6 +3350,7 @@ function bindShell() {
       proteina: cfg.proteina,
       salsas: salsasSel,
       extras,
+      masa: cfg.masa,
     });
 
     state.cart.push({
@@ -2388,8 +3366,220 @@ function bindShell() {
       extrasSalsa: extras,
       ingsShawarma: ingsIncluidos,
       proteina: cfg.proteina || "",
+      masa: cfg.masa,
     });
     cerrarShawarmaModal();
+  });
+
+  // Configurador Arma tu Roll
+  document.querySelectorAll("[data-roll-env]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.rollConfig) return;
+      state.rollConfig.envoltura = btn.dataset.rollEnv;
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-relleno]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.rollConfig) return;
+      state.rollConfig.relleno = btn.dataset.rollRelleno;
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-acomp]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.rollConfig) return;
+      const tipo = btn.dataset.rollAcomp;
+      if (tipo === "queso") {
+        state.rollConfig.acompanamientoTipo = "queso";
+        state.rollConfig.vegetal = null;
+      } else {
+        state.rollConfig.acompanamientoTipo = "vegetal";
+        state.rollConfig.vegetal = btn.dataset.rollVegetal;
+      }
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-topping]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.rollConfig) return;
+      const key = btn.dataset.rollTopping;
+      state.rollConfig.toppings[key] = !state.rollConfig.toppings[key];
+      syncRollModalUI();
+    });
+  });
+  document.querySelectorAll("[data-roll-salsa]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.rollConfig) return;
+      const salsa = btn.dataset.rollSalsa;
+      state.rollConfig.salsas[salsa] = !state.rollConfig.salsas[salsa];
+      syncRollModalUI();
+    });
+  });
+  document.getElementById("btn-cerrar-roll")?.addEventListener("click", () => {
+    cerrarRollModal();
+  });
+  document.getElementById("roll-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "roll-overlay") cerrarRollModal();
+  });
+  document.getElementById("btn-roll-dec")?.addEventListener("click", () => {
+    if (!state.rollConfig) return;
+    state.rollConfig.cantidad = Math.max(1, (state.rollConfig.cantidad || 1) - 1);
+    syncRollModalUI();
+  });
+  document.getElementById("btn-roll-inc")?.addEventListener("click", () => {
+    if (!state.rollConfig) return;
+    state.rollConfig.cantidad = Math.max(1, (state.rollConfig.cantidad || 1) + 1);
+    syncRollModalUI();
+  });
+  document.getElementById("roll-cantidad")?.addEventListener("change", (e) => {
+    if (!state.rollConfig) return;
+    state.rollConfig.cantidad = Math.max(1, Number(e.target.value) || 1);
+    syncRollModalUI();
+  });
+  document.getElementById("btn-roll-confirmar")?.addEventListener("click", () => {
+    const cfg = state.rollConfig;
+    if (!cfg || !rollConfigCompleta(cfg)) {
+      toast("Elige envoltura, relleno y acompañamiento", true);
+      return;
+    }
+    const { envSel, tops, salsas, unit } = rollModalSnapshot(cfg);
+    if (!envSel) {
+      toast("Falta la envoltura en la carta. Ejecuta seed_menu.", true);
+      return;
+    }
+    if (salsas.length > 0 && !idSalsaExtra()) {
+      toast("Falta el producto «Salsa extra» en la carta. Ejecuta seed_menu.", true);
+      return;
+    }
+    const cantidad = Math.max(
+      1,
+      Number(document.getElementById("roll-cantidad")?.value) || cfg.cantidad || 1
+    );
+    const toppingsLabels = tops.map((t) => t.label);
+    const rollArmado = labelRollArmado({
+      envoltura: cfg.envoltura,
+      relleno: cfg.relleno,
+      acompanamientoTipo: cfg.acompanamientoTipo,
+      vegetal: cfg.vegetal,
+      toppingsLabels,
+      salsas,
+    });
+    state.cart.push({
+      producto: envSel.producto.id,
+      nombre: "Arma tu Roll",
+      precio: unit,
+      precioBase: Number(envSel.precio),
+      cantidad,
+      categoria: "rolls",
+      descripcion: "",
+      rollArmado,
+      salsas,
+      extrasSalsaRoll: salsas.length,
+      toppingsDetalle: tops.map((t) => ({
+        id: t.productoObj.id,
+        nombre: t.producto,
+        label: t.label,
+        precio: t.precio,
+      })),
+    });
+    cerrarRollModal();
+  });
+
+  // Configurador Arma tu Gohan
+  document.querySelectorAll("[data-gohan-espol]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.gohanConfig) return;
+      state.gohanConfig.espolvoreado = btn.dataset.gohanEspol;
+      syncGohanModalUI();
+    });
+  });
+  document.querySelectorAll("[data-gohan-proteina]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.gohanConfig) return;
+      state.gohanConfig.proteina = btn.dataset.gohanProteina;
+      syncGohanModalUI();
+    });
+  });
+  document.getElementById("btn-gohan-furay")?.addEventListener("click", () => {
+    if (!state.gohanConfig) return;
+    state.gohanConfig.furay = !state.gohanConfig.furay;
+    syncGohanModalUI();
+  });
+  document.querySelectorAll("[data-gohan-veg]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!state.gohanConfig) return;
+      const veg = btn.dataset.gohanVeg;
+      const list = [...(state.gohanConfig.vegetales || [])];
+      const idx = list.indexOf(veg);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+      } else if (list.length >= 2) {
+        showGohanVegError("Solo puedes elegir 2");
+        return;
+      } else {
+        list.push(veg);
+      }
+      state.gohanConfig.vegetales = list;
+      state.gohanConfig.vegError = null;
+      syncGohanModalUI();
+    });
+  });
+  document.getElementById("btn-cerrar-gohan")?.addEventListener("click", () => {
+    cerrarGohanModal();
+  });
+  document.getElementById("gohan-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "gohan-overlay") cerrarGohanModal();
+  });
+  document.getElementById("btn-gohan-dec")?.addEventListener("click", () => {
+    if (!state.gohanConfig) return;
+    state.gohanConfig.cantidad = Math.max(1, (state.gohanConfig.cantidad || 1) - 1);
+    syncGohanModalUI();
+  });
+  document.getElementById("btn-gohan-inc")?.addEventListener("click", () => {
+    if (!state.gohanConfig) return;
+    state.gohanConfig.cantidad = Math.max(1, (state.gohanConfig.cantidad || 1) + 1);
+    syncGohanModalUI();
+  });
+  document.getElementById("gohan-cantidad")?.addEventListener("change", (e) => {
+    if (!state.gohanConfig) return;
+    state.gohanConfig.cantidad = Math.max(1, Number(e.target.value) || 1);
+    syncGohanModalUI();
+  });
+  document.getElementById("btn-gohan-confirmar")?.addEventListener("click", () => {
+    const cfg = state.gohanConfig;
+    if (!cfg || !gohanConfigCompleta(cfg)) {
+      toast("Elige espolvoreado, proteína y 2 vegetales", true);
+      return;
+    }
+    const { p, furay, precioFuray, unit } = gohanModalSnapshot(cfg);
+    if (!p) {
+      toast("Falta el producto Gohan. Ejecuta seed_menu.", true);
+      return;
+    }
+    if (cfg.furay && !furay) {
+      toast(`Falta el producto «${NOMBRE_FURAY}». Ejecuta seed_menu.`, true);
+      return;
+    }
+    const cantidad = Math.max(
+      1,
+      Number(document.getElementById("gohan-cantidad")?.value) || cfg.cantidad || 1
+    );
+    state.cart.push({
+      producto: p.id,
+      nombre: "Arma tu Gohan",
+      precio: unit,
+      precioBase: Number(p.precio),
+      cantidad,
+      categoria: "gohan",
+      descripcion: "",
+      gohanArmado: labelGohanArmado(cfg),
+      furay: Boolean(cfg.furay),
+      extrasFuray: cfg.furay ? 1 : 0,
+      furayProductoId: furay?.id || null,
+      furayPrecio: precioFuray,
+    });
+    cerrarGohanModal();
   });
 
   const openPedido = () => {
@@ -2640,7 +3830,7 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     e.preventDefault();
     const nombre = document.getElementById("zona-nombre").value.trim();
     const descripcion = document.getElementById("zona-descripcion").value.trim();
-    const precio = document.getElementById("zona-precio").value;
+    const precio = Math.round(Number(document.getElementById("zona-precio").value));
     const body = {
       nombre,
       descripcion,
@@ -2660,6 +3850,191 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     } catch (err) {
       toast(err.message, true);
     }
+  });
+
+  document.getElementById("btn-reintentar-horario")?.addEventListener("click", async () => {
+    await loadHorario();
+    render();
+  });
+
+  document.querySelector('#form-horario [name="turno2_activo"]')?.addEventListener(
+    "change",
+    (e) => {
+      if (!state.horarioLoaded) return;
+      const on = e.target.checked;
+      ["turno2_inicio", "turno2_fin"].forEach((name) => {
+        const input = document.querySelector(`#form-horario [name="${name}"]`);
+        if (!input) return;
+        input.disabled = !on;
+        input.required = on;
+      });
+    }
+  );
+
+  document.getElementById("form-horario")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.horarioLoaded || !state.horarioForm) {
+      toast("No se pudo cargar el horario. Reintenta antes de guardar.", true);
+      return;
+    }
+    const form = e.target;
+    const bool = (name) => Boolean(form.elements[name]?.checked);
+    const body = {
+      habilitado: bool("habilitado"),
+      lunes: bool("lunes"),
+      martes: bool("martes"),
+      miercoles: bool("miercoles"),
+      jueves: bool("jueves"),
+      viernes: bool("viernes"),
+      sabado: bool("sabado"),
+      domingo: bool("domingo"),
+      turno1_inicio: form.elements.turno1_inicio.value,
+      turno1_fin: form.elements.turno1_fin.value,
+      turno2_activo: bool("turno2_activo"),
+      turno2_inicio: form.elements.turno2_inicio.value || "18:00",
+      turno2_fin: form.elements.turno2_fin.value || "22:45",
+      texto_horario: form.elements.texto_horario.value.trim(),
+      mensaje_cerrado: form.elements.mensaje_cerrado.value.trim(),
+    };
+    state.horarioSaving = true;
+    state.horarioError = "";
+    render();
+    try {
+      state.horarioForm = horarioFormFromApi(await api.guardarHorarioPedidos(body));
+      state.horarioLoaded = true;
+      toast("Horario guardado");
+    } catch (err) {
+      state.horarioError = err.message || "No se pudo guardar";
+      toast(state.horarioError, true);
+    } finally {
+      state.horarioSaving = false;
+      render();
+    }
+  });
+
+  document.getElementById("carta-filtro")?.addEventListener("change", (e) => {
+    state.cartaFiltro = e.target.value;
+    render();
+  });
+  document.getElementById("carta-buscar")?.addEventListener("input", (e) => {
+    state.cartaBusqueda = e.target.value;
+    render();
+    const input = document.getElementById("carta-buscar");
+    if (input) {
+      input.focus();
+      const len = input.value.length;
+      input.setSelectionRange(len, len);
+    }
+  });
+
+  document.getElementById("btn-agregar-producto")?.addEventListener("click", () => {
+    state.productoForm = emptyProductoForm();
+    state.productoModalOpen = true;
+    render();
+    document.getElementById("prod-nombre")?.focus();
+  });
+
+  const cerrarModalProducto = () => {
+    cerrarProductoModal();
+    render();
+  };
+  document.getElementById("btn-cancelar-producto")?.addEventListener("click", cerrarModalProducto);
+  document.getElementById("btn-cerrar-producto")?.addEventListener("click", cerrarModalProducto);
+  document.getElementById("producto-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "producto-overlay") cerrarModalProducto();
+  });
+
+  document.getElementById("form-producto")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      nombre: document.getElementById("prod-nombre").value.trim(),
+      descripcion: document.getElementById("prod-descripcion").value.trim(),
+      precio: Math.round(Number(document.getElementById("prod-precio").value)),
+      categoria: document.getElementById("prod-categoria").value,
+      estado: document.getElementById("prod-estado").value,
+    };
+    try {
+      if (state.productoForm?.id) {
+        await api.actualizarProducto(state.productoForm.id, body);
+        toast("Producto actualizado");
+      } else {
+        await api.crearProducto(body);
+        toast("Producto agregado");
+      }
+      cerrarProductoModal();
+      state.productos = await api.productos();
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  document.querySelectorAll("[data-prod-menu]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wrap = btn.closest(".kebab");
+      const menu = wrap?.querySelector(".kebab-menu");
+      const open = menu && !menu.hidden;
+      document.querySelectorAll(".kebab-menu").forEach((el) => {
+        el.hidden = true;
+      });
+      document.querySelectorAll("[data-prod-menu],[data-zona-menu]").forEach((el) => {
+        el.setAttribute("aria-expanded", "false");
+      });
+      if (menu && !open) {
+        menu.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-editar-prod]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = state.productos.find((x) => String(x.id) === String(btn.dataset.editarProd));
+      if (!p) return;
+      state.productoForm = {
+        id: p.id,
+        nombre: p.nombre || "",
+        descripcion: p.descripcion || "",
+        precio: precioInputClp(p.precio),
+        categoria: p.categoria || "picoteo",
+        estado: p.estado || "activo",
+      };
+      state.productoModalOpen = true;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-desactivar-prod]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.desactivarProd;
+      if (!confirm("¿Desactivar este producto? Dejará de verse en la carta.")) return;
+      try {
+        await api.actualizarProducto(id, { estado: "inactivo" });
+        toast("Producto desactivado");
+        state.productos = await api.productos();
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-activar-prod]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.activarProd;
+      try {
+        await api.actualizarProducto(id, { estado: "activo" });
+        toast("Producto activado");
+        state.productos = await api.productos();
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
   });
 
   document.getElementById("btn-agregar-zona")?.addEventListener("click", () => {
@@ -2718,7 +4093,7 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
         id: zona.id,
         nombre: zona.nombre || "",
         descripcion: zona.descripcion || "",
-        precio: Number(zona.precio) || 0,
+        precio: precioInputClp(zona.precio) || "0",
       };
       state.zonaModalOpen = true;
       render();
@@ -3008,6 +4383,12 @@ if (state.metodo_pago === "mixto") {
       if (l.shawarma) {
         notas = l.shawarma;
       }
+      if (l.rollArmado) {
+        notas = l.rollArmado;
+      }
+      if (l.gohanArmado) {
+        notas = l.gohanArmado;
+      }
       if (l.nota) {
         notas = notas ? `${notas} || ${l.nota}` : l.nota;
       }
@@ -3036,6 +4417,44 @@ if (state.metodo_pago === "mixto") {
             rolls_quitados: [],
           });
         }
+      }
+      const extrasSalsaRoll = Number(l.extrasSalsaRoll) || 0;
+      if (extrasSalsaRoll > 0) {
+        const salsaId = idSalsaExtra();
+        if (salsaId) {
+          rows.push({
+            producto: salsaId,
+            cantidad: extrasSalsaRoll * l.cantidad,
+            nombre: "Salsa extra",
+            precio: PRECIO_SALSA_EXTRA_ROLL,
+            notas: `Salsas de ${l.nombre}: ${(l.salsas || []).join(", ")}`,
+            rolls: [],
+            rolls_quitados: [],
+          });
+        }
+      }
+      for (const t of l.toppingsDetalle || []) {
+        rows.push({
+          producto: t.id,
+          cantidad: l.cantidad,
+          nombre: t.nombre,
+          precio: t.precio,
+          notas: `Topping ${t.label} en Arma tu Roll`,
+          rolls: [],
+          rolls_quitados: [],
+        });
+      }
+      const extrasFuray = Number(l.extrasFuray) || 0;
+      if (extrasFuray > 0 && l.furayProductoId) {
+        rows.push({
+          producto: l.furayProductoId,
+          cantidad: extrasFuray * l.cantidad,
+          nombre: NOMBRE_FURAY,
+          precio: l.furayPrecio,
+          notas: `Furay en Arma tu Gohan`,
+          rolls: [],
+          rolls_quitados: [],
+        });
       }
       const extrasPalta = Number(l.extrasPalta) || 0;
       if (extrasPalta > 0) {

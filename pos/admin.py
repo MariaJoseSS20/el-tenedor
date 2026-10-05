@@ -6,6 +6,7 @@ from .models import (
     CustomUser,
     DetallePedido,
     DetalleVenta,
+    HorarioPedidosWeb,
     Inventario,
     Pedido,
     Producto,
@@ -43,6 +44,47 @@ class ZonaDeliveryAdmin(admin.ModelAdmin):
     list_display = ("nombre", "descripcion", "precio")
     search_fields = ("nombre", "descripcion")
     list_editable = ("precio",)
+
+
+@admin.register(HorarioPedidosWeb)
+class HorarioPedidosWebAdmin(admin.ModelAdmin):
+    list_display = (
+        "habilitado",
+        "turno1_inicio",
+        "turno1_fin",
+        "turno2_activo",
+        "turno2_inicio",
+        "turno2_fin",
+        "actualizado_en",
+    )
+    fieldsets = (
+        ("Estado", {"fields": ("habilitado",)}),
+        (
+            "Días",
+            {
+                "fields": (
+                    "lunes",
+                    "martes",
+                    "miercoles",
+                    "jueves",
+                    "viernes",
+                    "sabado",
+                    "domingo",
+                )
+            },
+        ),
+        ("Turno 1", {"fields": ("turno1_inicio", "turno1_fin")}),
+        ("Turno 2", {"fields": ("turno2_activo", "turno2_inicio", "turno2_fin")}),
+        ("Textos", {"fields": ("texto_horario", "mensaje_cerrado")}),
+        ("Meta", {"fields": ("actualizado_en",)}),
+    )
+    readonly_fields = ("actualizado_en",)
+
+    def has_add_permission(self, request):
+        return not HorarioPedidosWeb.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Producto)

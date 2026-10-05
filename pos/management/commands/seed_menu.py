@@ -65,19 +65,42 @@ MENU = [
     ("Tabla 63 Bocados", "7 tipos de rolls", "29000", "tablas"),
     ("Tabla 90 Bocados", "10 tipos de rolls", "41000", "tablas"),
     ("Tabla 108 Bocados", "12 tipos de rolls", "47000", "tablas"),
-    # Gohan
-    ("Gohan", "Base arroz + queso phila / salsa + espolvoreado", "7000", "gohan"),
-    # Bebestibles
-    ("Coca-Cola 350 ml", "", "1500", "bebestibles"),
-    ("Coca-Cola Zero 350 ml", "", "1500", "bebestibles"),
-    ("Sprite 350 ml", "", "1500", "bebestibles"),
-    ("Fanta 350 ml", "", "1500", "bebestibles"),
-    ("Agua mineral 500 ml", "", "1200", "bebestibles"),
-    ("Jugo natural", "", "2500", "bebestibles"),
+    # Arma tu Roll (una tarjeta en UI; cada envoltura es un producto cobrable)
+    ("Arma tu Roll · Panko", "Envoltura Panko", "6300", "rolls"),
+    ("Arma tu Roll · Tempura", "Envoltura Tempura", "6300", "rolls"),
+    ("Arma tu Roll · Handroll", "Envoltura Handroll", "6300", "rolls"),
+    ("Arma tu Roll · Palta", "Envoltura Palta", "6300", "rolls"),
+    ("Arma tu Roll · Ciboulette", "Envoltura Ciboulette", "6300", "rolls"),
+    ("Arma tu Roll · Sésamo", "Envoltura Sésamo", "6300", "rolls"),
+    ("Arma tu Roll · Merkén", "Envoltura Merkén", "6300", "rolls"),
+    ("Arma tu Roll · Queso", "Envoltura Queso", "6300", "rolls"),
+    ("Arma tu Roll · Salmón", "Envoltura Salmón", "6700", "rolls"),
+    ("Arma tu Roll · Jamón serrano", "Envoltura Jamón serrano", "6700", "rolls"),
+    ("Arma tu Roll · Tenedor (doble envoltura)", "Envoltura Tenedor (doble)", "7000", "rolls"),
+    ("Arma tu Roll · Luco", "Envoltura Luco", "6800", "rolls"),
+    ("Arma tu Roll · Hosomaki", "Envoltura Hosomaki", "4600", "rolls"),
+    ("Arma tu Roll · Futomaki", "Envoltura Futomaki", "6300", "rolls"),
+    ("Arma tu Roll · Futomaki frito", "Envoltura Futomaki frito", "6500", "rolls"),
+    # Gohan / Arma tu Gohan
+    (
+        "Gohan",
+        "Arroz + queso phila + salsa + espolvoreado. Elige proteína y 2 vegetales.",
+        "7000",
+        "gohan",
+    ),
+    # Bebestibles (lata 350 ml)
+    ("Coca-Cola 350 ml", "Lata 350 ml", "1500", "bebestibles"),
+    ("Coca-Cola Zero 350 ml", "Lata 350 ml", "1500", "bebestibles"),
+    ("Pepsi 350 ml", "Lata 350 ml", "1500", "bebestibles"),
+    ("Pepsi Zero 350 ml", "Lata 350 ml", "1500", "bebestibles"),
     # Agregados
     ("Palta extra", "Agregar palta", "1000", "agregados"),
-    ("Salsa extra", "Ajo, merkén, cilantro o ciboulette", "800", "agregados"),
+    ("Salsa extra", "Ajo, merkén, cilantro, ciboulette, unagui, soya o picante", "800", "agregados"),
     ("Proteína Furay", "Extra furay en gohan", "500", "agregados"),
+    ("Topping ceviche", "Topping para Arma tu Roll", "1500", "agregados"),
+    ("Topping acevichada", "Topping para Arma tu Roll", "500", "agregados"),
+    ("Topping teriyaki", "Topping para Arma tu Roll", "500", "agregados"),
+    ("Topping sriracha mayo", "Topping para Arma tu Roll", "500", "agregados"),
 ]
 
 

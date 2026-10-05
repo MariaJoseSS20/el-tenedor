@@ -4,14 +4,17 @@ Sin control de stock (inventario es catálogo 1:1).
 """
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from pos.horario_pedidos import MENSAJE_CERRADO, estado_pedidos_web
 from pos.models import CajaDiaria, CustomUser, Inventario, Producto, Venta, ZonaDelivery
 
 
@@ -497,14 +500,17 @@ class PedidosWebpayTests(BaseAPITest):
         self._patcher_throttle = patch(
             "pos.views.PedidoViewSet.get_throttles", return_value=[]
         )
+        self._patcher_horario = patch("pos.views.pedidos_web_abiertos", return_value=True)
         self.mock_create = self._patcher_create.start()
         self.mock_commit = self._patcher_commit.start()
         self.mock_refund = self._patcher_refund.start()
         self._patcher_throttle.start()
+        self._patcher_horario.start()
         self.addCleanup(self._patcher_create.stop)
         self.addCleanup(self._patcher_commit.stop)
         self.addCleanup(self._patcher_refund.stop)
         self.addCleanup(self._patcher_throttle.stop)
+        self.addCleanup(self._patcher_horario.stop)
 
         from pos.webpay import WebpayCommitResult, WebpayCreateResult, WebpayRefundResult
 
@@ -822,4 +828,86 @@ class ZonaDeliveryTests(BaseAPITest):
         self.assertIsNone(pedido.zona_delivery_id)
         self.assertEqual(pedido.zona_nombre, "Ciudad")
         self.assertEqual(pedido.cobro_delivery, Decimal("3500.00"))
+
+
+class HorarioPedidosTests(BaseAPITest):
+    TZ = ZoneInfo("America/Punta_Arenas")
+
+    def _local(self, y, m, d, hh, mm):
+        return datetime(y, m, d, hh, mm, tzinfo=self.TZ)
+
+    def test_abierto_en_ventana_almuerzo(self):
+        # Lunes 12:00
+        estado = estado_pedidos_web(self._local(2026, 10, 5, 12, 0))
+        self.assertTrue(estado["abierto"])
+
+    def test_abierto_hasta_fin_ventana(self):
+        estado = estado_pedidos_web(self._local(2026, 10, 5, 15, 45))
+        self.assertTrue(estado["abierto"])
+        estado = estado_pedidos_web(self._local(2026, 10, 5, 15, 46))
+        self.assertFalse(estado["abierto"])
+
+    def test_cerrado_entre_turnos(self):
+        estado = estado_pedidos_web(self._local(2026, 10, 5, 16, 30))
+        self.assertFalse(estado["abierto"])
+
+    def test_abierto_noche(self):
+        estado = estado_pedidos_web(self._local(2026, 10, 5, 20, 0))
+        self.assertTrue(estado["abierto"])
+
+    def test_cerrado_domingo(self):
+        # Domingo 13:00
+        estado = estado_pedidos_web(self._local(2026, 10, 4, 13, 0))
+        self.assertFalse(estado["abierto"])
+        self.assertEqual(estado["mensaje"], MENSAJE_CERRADO)
+
+    def test_endpoint_publico_horario(self):
+        r = self.client.get("/api/horario-pedidos/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIn("abierto", r.data)
+        self.assertIn("horario", r.data)
+
+    def test_crear_pedido_fuera_de_horario_rechazado(self):
+        with patch("pos.views.pedidos_web_abiertos", return_value=False):
+            with patch(
+                "pos.views.estado_pedidos_web",
+                return_value={"mensaje": MENSAJE_CERRADO, "abierto": False},
+            ):
+                r = self.client.post(
+                    "/api/pedidos/",
+                    {
+                        "nombre_cliente": "Ana",
+                        "telefono": "+56912345678",
+                        "tipo_entrega": "retiro",
+                        "detalles": [{"producto": self.producto.id, "cantidad": 1}],
+                    },
+                    format="json",
+                )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("no recibimos pedidos", r.data["detail"].lower())
+
+    def test_admin_puede_editar_horario(self):
+        self.auth(self.admin)
+        r = self.client.get("/api/horario-pedidos/config/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertTrue(r.data["habilitado"])
+        patch = self.client.patch(
+            "/api/horario-pedidos/config/",
+            {"domingo": True, "habilitado": False},
+            format="json",
+        )
+        self.assertEqual(patch.status_code, status.HTTP_200_OK)
+        self.assertTrue(patch.data["domingo"])
+        self.assertFalse(patch.data["habilitado"])
+        estado = self.client.get("/api/horario-pedidos/")
+        self.assertFalse(estado.data["abierto"])
+
+    def test_cajero_no_edita_horario(self):
+        self.auth(self.cajero)
+        r = self.client.patch(
+            "/api/horario-pedidos/config/",
+            {"habilitado": False},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
 

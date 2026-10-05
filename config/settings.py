@@ -175,7 +175,8 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ),
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "30/minute",
+        # Lectura de carta/horario/zonas públicas no usa este cupo.
+        "anon": "60/minute",
         "user": "120/minute",
         "login": "10/minute",
         "pedidos": "10/minute",
