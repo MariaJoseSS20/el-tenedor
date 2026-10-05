@@ -18,6 +18,18 @@ function money(n) {
   }).format(Number(n) || 0);
 }
 
+function calcularIvaIncluido(total) {
+  const totalVenta = Math.round(Number(total) || 0);
+  const neto = Math.round(totalVenta / 1.19);
+  const iva = totalVenta - neto;
+
+  return {
+    neto,
+    iva,
+    total: totalVenta,
+  };
+}
+
 function fechaLocal(iso) {
   try {
     return new Date(iso).toLocaleString("es-CL");
@@ -33,6 +45,10 @@ export function normalizarVentaParaTicket(ventaOPayload, opts = {}) {
       id: ventaOPayload.id ?? "—",
       fecha_hora: ventaOPayload.fecha_hora || new Date().toISOString(),
       metodo_pago: ventaOPayload.metodo_pago || "",
+      pagos: (ventaOPayload.pagos || []).map((p) => ({
+        metodo: p.metodo || "",
+        monto: Number(p.monto) || 0,
+      })),
       tipo_entrega: ventaOPayload.tipo_entrega || "",
       cobro_delivery: Number(ventaOPayload.cobro_delivery) || 0,
       total: Number(ventaOPayload.total) || 0,
@@ -45,17 +61,26 @@ export function normalizarVentaParaTicket(ventaOPayload, opts = {}) {
       detalles: (ventaOPayload.detalles || []).map((d) => ({
         nombre: d.producto_nombre || d.nombre || `Producto #${d.producto}`,
         cantidad: d.cantidad,
-        subtotal: Number(d.subtotal != null ? d.subtotal : (d.precio || 0) * d.cantidad),
+        subtotal: Number(
+          d.subtotal != null
+            ? d.subtotal
+            : (d.precio || 0) * d.cantidad
+        ),
         notas: d.notas || "",
       })),
     };
   }
 
   const payload = ventaOPayload;
+
   return {
     id: opts.offline ? "offline" : "—",
     fecha_hora: payload.fecha_hora || new Date().toISOString(),
     metodo_pago: payload.metodo_pago || "",
+    pagos: (payload.pagos || []).map((p) => ({
+      metodo: p.metodo || "",
+      monto: Number(p.monto) || 0,
+    })),
     tipo_entrega: payload.tipo_entrega || "",
     cobro_delivery: Number(payload.cobro_delivery) || 0,
     total: Number(payload.total_local) || 0,
@@ -96,12 +121,16 @@ function documentoHtml(title, bodyInner) {
 </body>
 </html>`;
 }
-
 export function imprimirTicketCliente(ventaNorm, win = null) {
+  const impuestos = calcularIvaIncluido(ventaNorm.total);
+
   const lineas = (ventaNorm.detalles || [])
     .map(
       (d) => `
-      <div class="line"><span>${esc(d.cantidad)}× ${esc(d.nombre)}</span><span>${esc(money(d.subtotal))}</span></div>
+      <div class="line">
+        <span>${esc(d.cantidad)}× ${esc(d.nombre)}</span>
+        <span>${esc(money(d.subtotal))}</span>
+      </div>
       ${d.notas ? `<div class="notas">${esc(d.notas)}</div>` : ""}`
     )
     .join("");
@@ -111,33 +140,103 @@ export function imprimirTicketCliente(ventaNorm, win = null) {
       ? `<div class="line"><span>Delivery</span><span>${esc(money(ventaNorm.cobro_delivery))}</span></div>`
       : "";
 
+  const nombresPago = {
+    efectivo: "Efectivo",
+    debito: "Débito",
+    credito: "Crédito",
+    transferencia: "Transferencia",
+    webpay: "Webpay",
+    tarjeta: "Tarjeta",
+  };
+
+  const pagos = (ventaNorm.pagos || []).filter(
+    (p) => Number(p.monto) > 0
+  );
+
+  const detallePagos = pagos.length
+    ? pagos
+        .map(
+          (p) => `
+          <div class="line">
+            <span>${esc(nombresPago[p.metodo] || p.metodo)}</span>
+            <span>${esc(money(p.monto))}</span>
+          </div>`
+        )
+        .join("")
+    : `
+      <div class="line">
+        <span>${esc(
+          nombresPago[ventaNorm.metodo_pago] ||
+          ventaNorm.metodo_pago ||
+          "No informado"
+        )}</span>
+        <span>${esc(money(ventaNorm.total))}</span>
+      </div>`;
+
   const body = `
     <h1>el Tenedor</h1>
-    <p class="sub">General del Canto · Ticket</p>
+    <p class="sub">General del Canto · Restaurante para llevar</p>
+    <p class="banner">COMPROBANTE DE VENTA</p>
+
     <div class="meta">
-      <div>Pedido #${esc(ventaNorm.id)}</div>
-      <div>${esc(fechaLocal(ventaNorm.fecha_hora))}</div>
-      <div>Pago: ${esc(ventaNorm.metodo_pago)} · ${esc(ventaNorm.tipo_entrega)}</div>
-      ${(ventaNorm.cliente_nombre || ventaNorm.cliente) 
-        ? `<div>Cliente: ${esc(ventaNorm.cliente_nombre || ventaNorm.cliente)}</div>` 
+      <div><strong>Venta #${esc(ventaNorm.id)}</strong></div>
+      <div>Fecha: ${esc(fechaLocal(ventaNorm.fecha_hora))}</div>
+      <div>Entrega: ${esc(ventaNorm.tipo_entrega)}</div>
+      ${(ventaNorm.cliente_nombre || ventaNorm.cliente)
+        ? `<div>Cliente: ${esc(ventaNorm.cliente_nombre || ventaNorm.cliente)}</div>`
         : ""
       }
       ${ventaNorm.cajero ? `<div>Cajero: ${esc(ventaNorm.cajero)}</div>` : ""}
       ${ventaNorm.notas ? `<div><strong>Nota:</strong> ${esc(ventaNorm.notas)}</div>` : ""}
     </div>
+
     <hr />
+
     ${lineas || "<p>Sin ítems</p>"}
     ${delivery}
+
     <hr />
-    <div class="total"><span>TOTAL</span><span>${esc(money(ventaNorm.total))}</span></div>
-    <p class="sub" style="margin-top:14px">¡Gracias!</p>
+    <div class="line">
+      <span>Monto neto</span>
+      <span>${esc(money(impuestos.neto))}</span>
+    </div>
+
+    <div class="line">
+      <span>IVA 19% incluido</span>
+      <span>${esc(money(impuestos.iva))}</span>
+    </div>
+
+    <hr />
+
+    <div class="total">
+      <span>TOTAL</span>
+      <span>${esc(money(impuestos.total))}</span>
+    </div>
+
+    <hr />
+
+    <div class="meta">
+      <strong>FORMA DE PAGO</strong>
+    </div>
+
+    ${detallePagos}
+
+    <p class="sub" style="margin-top:14px">
+      IVA incluido en el precio final
+    </p>
+
+    <p class="sub">
+      ¡Gracias por su compra!
+    </p>
     <p class="sub" style="margin-top:6px; font-size:11px;">📍 Calle General Estanislao del Canto 326, General del Canto, Punta Arenas</p>
     <p class="sub" style="margin-top:2px; font-size:11px;">📱 WhatsApp: +56 9 54332805</p>
   `;
 
-  return escribirImpresion(documentoHtml(`Ticket #${ventaNorm.id}`, body), win);
+  return escribirImpresion(
+    documentoHtml(`Comprobante #${ventaNorm.id}`, body),
+    win
+  );
 }
-
 export function imprimirComandaCocina(ventaNorm, win = null) {
   const lineas = (ventaNorm.detalles || [])
     .map(

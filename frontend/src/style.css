@@ -490,10 +490,10 @@ select {
   top: 84px;
   box-shadow: var(--shadow-hard);
   max-height: calc(100vh - 110px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: auto;
 }
 
 .cart-side-head {
@@ -1116,6 +1116,7 @@ select {
   /* máx. ~2 líneas */
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
