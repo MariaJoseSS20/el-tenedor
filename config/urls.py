@@ -6,6 +6,7 @@ from django.contrib import admin
 from django.urls import include, path
 
 from config.auth_views import (
+    RegistroView,
     ThrottledTokenObtainPairView,
     ThrottledTokenRefreshView,
 )
@@ -19,6 +20,7 @@ urlpatterns = [
         ThrottledTokenRefreshView.as_view(),
         name="token_refresh",
     ),
+    path("api/registro/", RegistroView.as_view(), name="registro"),
     # API del POS
     path("api/", include("pos.urls")),
 ]

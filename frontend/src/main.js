@@ -5,6 +5,7 @@ import {
   getCachedUser,
   getTokens,
   login,
+  register,
   setCachedUser,
 } from "./api.js";
 import { countPendingSales, savePendingSale } from "./db.js";
@@ -70,6 +71,8 @@ const state = {
   online: navigator.onLine,
   pending: 0,
   view: "pos",
+  /** Pantalla de acceso: "login" | "register" */
+  authScreen: "login",
   productos: [],
   categoria: "todas",
   cart: [],
@@ -399,9 +402,17 @@ function renderLogin() {
         </div>
         <button class="btn btn-primary" type="submit">Entrar</button>
         <p class="error" id="login-error" hidden></p>
+        <p class="auth-switch">
+          ¿No tienes cuenta?
+          <button type="button" class="linkish" id="go-register">Registrarse</button>
+        </p>
       </form>
     </section>
   `;
+  document.getElementById("go-register").addEventListener("click", () => {
+    state.authScreen = "register";
+    render();
+  });
   document.getElementById("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const err = document.getElementById("login-error");
@@ -409,18 +420,79 @@ function renderLogin() {
     const fd = new FormData(e.target);
     try {
       state.user = await login(fd.get("username"), fd.get("password"));
-      await loadProductos();
-      await loadZonas();
-      await refreshPending();
-      await trySync(false);
-      startPedidosPolling();
-      state.view = "pos";
-      render();
+      await enterAfterAuth();
     } catch (ex) {
       err.textContent = ex.message || "No se pudo iniciar sesión";
       err.hidden = false;
     }
   });
+}
+
+function renderRegister() {
+  app.innerHTML = `
+    <section class="login-screen">
+      <form class="login-panel" id="register-form">
+        ${brandLockup(false)}
+        <div class="field">
+          <label for="reg-username">Usuario</label>
+          <input id="reg-username" name="username" autocomplete="username" required />
+        </div>
+        <div class="field">
+          <label for="reg-password">Contraseña</label>
+          <input id="reg-password" name="password" type="password" autocomplete="new-password" required minlength="8" />
+        </div>
+        <div class="field">
+          <label for="reg-password-confirm">Confirmar contraseña</label>
+          <input id="reg-password-confirm" name="password_confirm" type="password" autocomplete="new-password" required minlength="8" />
+        </div>
+        <button class="btn btn-primary" type="submit">Registrarse</button>
+        <p class="error" id="register-error" hidden></p>
+        <p class="auth-switch">
+          ¿Ya tienes cuenta?
+          <button type="button" class="linkish" id="go-login">Entrar</button>
+        </p>
+      </form>
+    </section>
+  `;
+  document.getElementById("go-login").addEventListener("click", () => {
+    state.authScreen = "login";
+    render();
+  });
+  document.getElementById("register-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("register-error");
+    err.hidden = true;
+    const fd = new FormData(e.target);
+    const password = String(fd.get("password") || "");
+    const password_confirm = String(fd.get("password_confirm") || "");
+    if (password !== password_confirm) {
+      err.textContent = "Las contraseñas no coinciden.";
+      err.hidden = false;
+      return;
+    }
+    try {
+      state.user = await register({
+        username: String(fd.get("username") || "").trim(),
+        password,
+        password_confirm,
+      });
+      state.authScreen = "login";
+      await enterAfterAuth();
+    } catch (ex) {
+      err.textContent = ex.message || "No se pudo crear la cuenta";
+      err.hidden = false;
+    }
+  });
+}
+
+async function enterAfterAuth() {
+  await loadProductos();
+  await loadZonas();
+  await refreshPending();
+  await trySync(false);
+  startPedidosPolling();
+  state.view = "pos";
+  render();
 }
 
 function shell(content) {
@@ -2905,7 +2977,8 @@ function renderCartaAdmin() {
 
 function render() {
   if (!state.user || !getTokens()) {
-    renderLogin();
+    if (state.authScreen === "register") renderRegister();
+    else renderLogin();
     return;
   }
 
@@ -2928,6 +3001,7 @@ function bindShell() {
   document.getElementById("btn-logout")?.addEventListener("click", () => {
     clearSession();
     state.user = null;
+    state.authScreen = "login";
     state.cart = [];
     stopPedidosPolling();
     state.pedidos = [];

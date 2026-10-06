@@ -92,6 +92,13 @@ async function request(path, options = {}) {
   return data;
 }
 
+/** DRF PageNumberPagination entrega {count, next, previous, results}. */
+function asList(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.results)) return data.results;
+  return [];
+}
+
 async function refreshAccess(refresh) {
   try {
     const res = await fetch(`${API_BASE}/api/token/refresh/`, {
@@ -123,9 +130,30 @@ export async function login(username, password) {
   return user;
 }
 
+export async function register({
+  username,
+  password,
+  password_confirm,
+  first_name = "",
+}) {
+  const data = await request("/api/registro/", {
+    method: "POST",
+    body: JSON.stringify({
+      username,
+      password,
+      password_confirm,
+      first_name,
+    }),
+  });
+  setTokens({ access: data.access, refresh: data.refresh });
+  const user = data.user || (await request("/api/me/"));
+  setCachedUser(user);
+  return user;
+}
+
 export const api = {
   me: () => request("/api/me/"),
-  productos: () => request("/api/productos/"),
+  productos: () => request("/api/productos/").then(asList),
   crearProducto: (body) =>
     request("/api/productos/", { method: "POST", body: JSON.stringify(body) }),
   actualizarProducto: (id, body) =>
@@ -133,7 +161,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  inventario: () => request("/api/inventario/"),
+  inventario: () => request("/api/inventario/").then(asList),
   agregarInventario: (body) =>
     request("/api/inventario/", {
       method: "POST",
@@ -146,7 +174,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  ventas: () => request("/api/ventas/"),
+  ventas: () => request("/api/ventas/").then(asList),
   crearVenta: (body) =>
     request("/api/ventas/", { method: "POST", body: JSON.stringify(body) }),
   anularVenta: (id) =>
@@ -159,7 +187,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(lote),
     }),
-  pedidos: () => request("/api/pedidos/"),
+  pedidos: () => request("/api/pedidos/").then(asList),
   recibirPedido: (id) =>
     request(`/api/pedidos/${id}/recibir/`, { method: "POST", body: "{}" }),
   cajaPreview: (fecha) => {
@@ -171,12 +199,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ fecha }),
     }),
-  cajas: () => request("/api/caja-diaria/"),
+  cajas: () => request("/api/caja-diaria/").then(asList),
   reporteDiario: (fecha) => {
     const q = fecha ? `?fecha=${fecha}` : "";
     return request(`/api/reportes/diario/${q}`);
   },
-  zonasDelivery: () => request("/api/zonas-delivery/"),
+  zonasDelivery: () => request("/api/zonas-delivery/").then(asList),
   crearZonaDelivery: (body) =>
     request("/api/zonas-delivery/", {
       method: "POST",

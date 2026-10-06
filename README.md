@@ -44,13 +44,15 @@ python3 manage.py test pos
 | Método | Ruta | Quién |
 |--------|------|--------|
 | POST | `/api/token/` | Login JWT |
+| POST | `/api/token/refresh/` | Refresh JWT |
+| POST | `/api/registro/` | Registro público (crea cajero + JWT). Pantalla **Registrarse** en el login del POS |
 | GET | `/api/me/` | Usuario autenticado |
-| GET/POST… | `/api/productos/` | GET todos · escritura Admin |
-| GET/PATCH | `/api/inventario/` | GET todos · escritura Admin |
-| GET/POST | `/api/ventas/` | Cajero y Admin |
+| GET/POST… | `/api/productos/` | GET todos · escritura Admin · paginado |
+| GET/PATCH | `/api/inventario/` | GET todos · escritura Admin · paginado |
+| GET/POST | `/api/ventas/` | Cajero y Admin · listado paginado |
 | PATCH | `/api/ventas/{id}/` `{"estado":"anulada"}` | Solo Admin (no hay DELETE) |
 | POST | `/api/sync-ventas/` | Lote offline |
-| GET/POST | `/api/caja-diaria/` | Solo Admin |
+| GET/POST | `/api/caja-diaria/` | Solo Admin · listado paginado |
 | GET | `/api/reportes/diario/?fecha=YYYY-MM-DD` | Solo Admin |
 
 ## 2. Frontend PWA

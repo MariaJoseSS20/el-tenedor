@@ -113,6 +113,23 @@ select {
   font-size: 0.92rem;
 }
 
+.auth-switch {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.auth-switch .linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--navy);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .field {
   display: grid;
   gap: 8px;

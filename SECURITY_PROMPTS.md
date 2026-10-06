@@ -41,6 +41,7 @@ Asignatura: Programación Backend — Guía API RESTful segura con DRF e IA.
 |--------|------|--------|
 | POST | `/api/token/` | Login JWT (throttled) |
 | POST | `/api/token/refresh/` | Refresh JWT (throttled) |
+| POST | `/api/registro/` | Registro cajero + JWT (throttled) |
 | GET | `/api/me/` | Usuario autenticado |
 | GET/POST/PUT/PATCH/DELETE | `/api/productos/` | Escritura solo admin |
 | GET/POST/PATCH/DELETE | `/api/inventario/` | Escritura solo admin |

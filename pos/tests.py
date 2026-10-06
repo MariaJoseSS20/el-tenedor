@@ -645,7 +645,7 @@ class PedidosWebpayTests(BaseAPITest):
         self.auth(self.cajero)
         lista = self.client.get("/api/pedidos/")
         self.assertEqual(lista.status_code, status.HTTP_200_OK)
-        ids = [p["id"] for p in lista.data]
+        ids = [p["id"] for p in lista.data["results"]]
         self.assertIn(pedido.id, ids)
 
     def test_pago_rechazado_no_crea_venta(self):
@@ -757,7 +757,7 @@ class PedidosWebpayTests(BaseAPITest):
         r = self.client.post(f"/api/pedidos/{created['pedido_id']}/recibir/")
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         lista = self.client.get("/api/pedidos/")
-        ids = [p["id"] for p in lista.data]
+        ids = [p["id"] for p in lista.data["results"]]
         self.assertNotIn(created["pedido_id"], ids)
 
     def test_pedido_rechazado_no_suma_caja(self):
@@ -927,4 +927,45 @@ class HorarioPedidosTests(BaseAPITest):
             format="json",
         )
         self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class RegistroYPaginacionTests(BaseAPITest):
+    def test_registro_crea_cajero_y_emite_jwt(self):
+        r = self.client.post(
+            "/api/registro/",
+            {
+                "username": "nuevo_cajero",
+                "password": "Segura123!",
+                "password_confirm": "Segura123!",
+                "first_name": "Nuevo",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertIn("access", r.data)
+        self.assertIn("refresh", r.data)
+        self.assertEqual(r.data["user"]["username"], "nuevo_cajero")
+        self.assertEqual(r.data["user"]["rol"], CustomUser.Rol.CAJERO)
+        user = CustomUser.objects.get(username="nuevo_cajero")
+        self.assertEqual(user.rol, CustomUser.Rol.CAJERO)
+
+    def test_registro_no_permite_usuario_duplicado(self):
+        r = self.client.post(
+            "/api/registro/",
+            {
+                "username": "cajero_test",
+                "password": "Segura123!",
+                "password_confirm": "Segura123!",
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_listas_paginadas(self):
+        self.auth(self.admin)
+        r = self.client.get("/api/productos/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertIn("results", r.data)
+        self.assertIn("count", r.data)
+        self.assertTrue(any(p["nombre"] == "Roll Test" for p in r.data["results"]))
 
