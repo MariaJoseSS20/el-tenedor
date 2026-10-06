@@ -389,7 +389,6 @@ function renderLogin() {
     <section class="login-screen">
       <form class="login-panel" id="login-form">
         ${brandLockup(false)}
-        <p class="hint">POS interno · funciona sin internet</p>
         <div class="field">
           <label for="username">Usuario</label>
           <input id="username" name="username" autocomplete="username" required />
