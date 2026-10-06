@@ -447,17 +447,34 @@ class CajaDiariaTests(BaseAPITest):
 
 
 class InventarioTests(BaseAPITest):
-    def test_put_mismo_producto_en_inventario(self):
+    def test_admin_crea_y_edita_empaque(self):
         self.auth(self.admin)
-        inv = Inventario.objects.create(producto=self.producto, notas="a")
+        crear = self.client.post(
+            "/api/inventario/",
+            {"nombre": "Bandejas", "cantidad": 10, "notas": "a"},
+            format="json",
+        )
+        self.assertEqual(crear.status_code, status.HTTP_201_CREATED)
+        inv_id = crear.data["id"]
+
         r = self.client.put(
-            f"/api/inventario/{inv.id}/",
-            {"producto": self.producto.id, "notas": "b"},
+            f"/api/inventario/{inv_id}/",
+            {"nombre": "Bandejas", "cantidad": 8, "notas": "b"},
             format="json",
         )
         self.assertEqual(r.status_code, status.HTTP_200_OK)
-        inv.refresh_from_db()
+        inv = Inventario.objects.get(pk=inv_id)
+        self.assertEqual(inv.cantidad, 8)
         self.assertEqual(inv.notas, "b")
+
+    def test_cajero_no_crea_inventario(self):
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/inventario/",
+            {"nombre": "Cubiertos", "cantidad": 5, "notas": ""},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class ReporteDiarioTests(BaseAPITest):
