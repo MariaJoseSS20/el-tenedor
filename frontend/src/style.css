@@ -2380,6 +2380,25 @@ select {
   cursor: not-allowed;
 }
 
+.pedir-btn-tienda {
+  width: 100%;
+  margin-top: 8px;
+  border: 2px solid var(--navy);
+  background: #fff;
+  color: var(--navy);
+  font: inherit;
+  font-weight: 800;
+  font-size: 1rem;
+  padding: 13px 18px;
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.pedir-btn-tienda:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .pedir-closed-banner {
   margin: 0 18px 14px;
   padding: 12px 14px;

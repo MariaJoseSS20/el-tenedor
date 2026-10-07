@@ -395,8 +395,9 @@ function validarCheckout() {
   return Object.keys(errors).length === 0;
 }
 
-async function pagar() {
+async function pagar(metodo) {
   if (state.paying) return;
+  if (metodo === "tienda" || metodo === "webpay") state.metodoPago = metodo;
   try {
     const horario = await publicGet("/api/horario-pedidos/");
     state.horario = {
@@ -941,19 +942,6 @@ function renderCartDrawer() {
                 }
                 <div class="is-total"><span>Total</span><strong>${money(cartTotal())}</strong></div>
               </div>
-              <div class="pedir-entrega-toggle" role="group" aria-label="Método de pago">
-                <button type="button" class="${state.metodoPago === "webpay" ? "is-on" : ""}" data-pago="webpay">
-                  Webpay
-                </button>
-                <button type="button" class="${state.metodoPago === "tienda" ? "is-on" : ""}" data-pago="tienda">
-                  Pagar en tienda
-                </button>
-              </div>
-              <p class="pedir-pay-hint">${
-                state.metodoPago === "tienda"
-                  ? "El pedido llega al local ahora. Pagas al retirar."
-                  : "Pagas con Webpay. Si anulas en Transbank, no se cobra ni llega el pedido."
-              }</p>
               ${
                 !pedidosAbiertos()
                   ? `<p class="pedir-closed-msg">${escapeHtml(
@@ -965,17 +953,23 @@ function renderCartDrawer() {
                 state.paying || !pedidosAbiertos() ? "disabled" : ""
               }>
                 ${
-                  state.paying
-                    ? state.metodoPago === "tienda"
-                      ? "Enviando pedido…"
-                      : "Abriendo Webpay…"
+                  state.paying && state.metodoPago === "webpay"
+                    ? "Abriendo Webpay…"
                     : !pedidosAbiertos()
                       ? "Cerrado ahora"
-                      : state.metodoPago === "tienda"
-                        ? `Confirmar pedido · ${money(cartTotal())}`
-                        : `Pagar con Webpay · ${money(cartTotal())}`
+                      : `Pagar con Webpay · ${money(cartTotal())}`
                 }
               </button>
+              <button type="button" class="pedir-btn-tienda" id="btn-pagar-tienda" ${
+                state.paying || !pedidosAbiertos() ? "disabled" : ""
+              }>
+                ${
+                  state.paying && state.metodoPago === "tienda"
+                    ? "Enviando pedido…"
+                    : "Pago en tienda"
+                }
+              </button>
+              <p class="pedir-pay-hint">Pago en tienda llega al POS. Pagas al retirar.</p>
             </footer>`
           : ""
       }
@@ -1549,14 +1543,6 @@ function bind() {
     });
   });
 
-  document.querySelectorAll("[data-pago]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      syncFormFromDom();
-      state.metodoPago = btn.dataset.pago === "tienda" ? "tienda" : "webpay";
-      render();
-    });
-  });
-
   document.querySelectorAll("[data-entrega]").forEach((btn) => {
     btn.addEventListener("click", () => {
       syncFormFromDom();
@@ -1634,7 +1620,11 @@ function bind() {
 
   document.getElementById("btn-pagar")?.addEventListener("click", (e) => {
     e.preventDefault();
-    pagar();
+    pagar("webpay");
+  });
+  document.getElementById("btn-pagar-tienda")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    pagar("tienda");
   });
 
   document.getElementById("btn-cerrar-add")?.addEventListener("click", (e) => {
