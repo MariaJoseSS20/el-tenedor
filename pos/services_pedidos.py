@@ -59,6 +59,12 @@ def crear_pedido_desde_payload(validated_data: dict) -> Pedido:
     detalles_data = validated_data.pop("detalles")
     cobro = validated_data.pop("_cobro_delivery", Decimal("0.00"))
     zona = validated_data.pop("zona_delivery", None)
+    metodo = validated_data.pop("metodo_pago", Pedido.MetodoPago.WEBPAY)
+    estado = (
+        Pedido.Estado.EN_TIENDA
+        if metodo == Pedido.MetodoPago.TIENDA
+        else Pedido.Estado.ESPERANDO_PAGO
+    )
 
     pedido = Pedido.objects.create(
         nombre_cliente=validated_data["nombre_cliente"],
@@ -71,7 +77,8 @@ def crear_pedido_desde_payload(validated_data: dict) -> Pedido:
         zona_nombre=zona.nombre if zona is not None else "",
         zona_descripcion=zona.descripcion if zona is not None else "",
         total=Decimal("0.00"),
-        estado=Pedido.Estado.ESPERANDO_PAGO,
+        estado=estado,
+        metodo_pago=metodo,
         buy_order=generar_buy_order(),
     )
 

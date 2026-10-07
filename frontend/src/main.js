@@ -1849,7 +1849,7 @@ function renderPedidos() {
               : ""
           }${
             p.direccion ? ` · ${escapeHtml(p.direccion)}` : ""
-          } · Pagado Webpay
+          } · ${p.metodo_pago === "tienda" ? "Pagar en tienda" : "Pagado Webpay"}
         </p>
         ${p.notas ? `<p class="sub">Nota: ${escapeHtml(p.notas)}</p>` : ""}
         <ul class="pedido-items">${items || "<li>Sin ítems</li>"}</ul>
@@ -1864,7 +1864,7 @@ function renderPedidos() {
   return `
     <section class="panel">
       <h2>Pedidos web</h2>
-      <p class="sub">Solo pedidos ya pagados con Webpay. Imprime la comanda y márcalo recibido.</p>
+      <p class="sub">Pedidos pagados con Webpay y pedidos para pagar en tienda. Imprime la comanda y márcalo recibido.</p>
       <div class="row-actions">
         <button class="btn btn-mint" id="btn-reload-pedidos" type="button">Actualizar</button>
       </div>

@@ -1451,7 +1451,9 @@ class PedidoViewSet(
 
         if self.action == "list":
 
-            return qs.filter(estado=Pedido.Estado.PAGADO)
+            return qs.filter(
+                estado__in=(Pedido.Estado.PAGADO, Pedido.Estado.EN_TIENDA)
+            )
 
         return qs
 
@@ -1467,6 +1469,16 @@ class PedidoViewSet(
         serializer.is_valid(raise_exception=True)
 
         pedido = crear_pedido_desde_payload(serializer.validated_data)
+
+        if pedido.metodo_pago == Pedido.MetodoPago.TIENDA:
+            return Response(
+                {
+                    "pedido_id": pedido.pk,
+                    "metodo_pago": pedido.metodo_pago,
+                    "total": str(pedido.total),
+                },
+                status=status.HTTP_201_CREATED,
+            )
 
         return_url = f"{settings.PUBLIC_API_BASE_URL}/api/pedidos/retorno/"
 
@@ -1510,11 +1522,11 @@ class PedidoViewSet(
 
         pedido = self.get_object()
 
-        if pedido.estado != Pedido.Estado.PAGADO:
+        if pedido.estado not in (Pedido.Estado.PAGADO, Pedido.Estado.EN_TIENDA):
 
             return Response(
 
-                {"detail": "Solo se pueden recibir pedidos pagados."},
+                {"detail": "Solo se pueden recibir pedidos pagados o por cobrar en tienda."},
 
                 status=status.HTTP_400_BAD_REQUEST,
 

@@ -536,6 +536,7 @@ class PedidoSerializer(serializers.ModelSerializer):
             "zona_descripcion",
             "total",
             "estado",
+            "metodo_pago",
             "buy_order",
             "authorization_code",
             "venta_id",
@@ -559,6 +560,11 @@ class PedidoCreateSerializer(serializers.Serializer):
         allow_null=True,
     )
     detalles = DetallePedidoCreateSerializer(many=True)
+    metodo_pago = serializers.ChoiceField(
+        choices=Pedido.MetodoPago.choices,
+        required=False,
+        default=Pedido.MetodoPago.WEBPAY,
+    )
     def validate_nombre_cliente(self, value):
         nombre = (value or "").strip()
         if len(nombre) < 2:

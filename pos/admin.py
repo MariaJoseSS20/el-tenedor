@@ -89,8 +89,8 @@ class ZonaDeliveryAdmin(MontosMixin, admin.ModelAdmin):
     @admin.display(description="Precio", ordering="precio")
     def precio_pesos(self, obj):
         return pesos(obj.precio)
+
     search_fields = ("nombre", "descripcion")
-    list_editable = ("precio",)
 
 
 @admin.register(HorarioPedidosWeb)

@@ -100,6 +100,7 @@ const state = {
   zonaId: null,
   direccion: "",
   nota_pedido: "",
+  metodoPago: "webpay",
   fieldErrors: {},
   shawarmaConfig: null,
   rollConfig: null,
@@ -461,8 +462,17 @@ async function pagar() {
       direccion: state.tipo_entrega === "delivery" ? state.direccion.trim() : "",
       zona_delivery: state.tipo_entrega === "delivery" ? zonaSeleccionada()?.id : null,
       notas: state.nota_pedido.trim(),
+      metodo_pago: state.metodoPago,
       detalles: buildDetallesPayload(),
     });
+    if (state.metodoPago === "tienda") {
+      state.paying = false;
+      state.cart = [];
+      state.cartOpen = false;
+      state.resultado = { pago: "tienda", pedido: String(data.pedido_id || "") };
+      render();
+      return;
+    }
     if (!data?.url || !data?.token) {
       throw new Error("No se pudo abrir Webpay. Intenta de nuevo.");
     }
@@ -734,9 +744,10 @@ function syncShawarmaModalUI() {
 
 function renderResultado() {
   const r = state.resultado;
-  const ok = r.pago === "ok";
+  const ok = r.pago === "ok" || r.pago === "tienda";
   const msgs = {
     ok: "Tu pago con Webpay fue autorizado. El local ya recibió el pedido.",
+    tienda: "El local ya recibió el pedido. Paga al retirar en tienda.",
     anulado: "Anulaste la compra en Webpay. No se cobró nada.",
     rechazado: "El banco rechazó el pago. No se cobró nada.",
     error: "No se pudo confirmar el pago. Si te cobraron, contacta al local con tu comprobante.",
@@ -930,7 +941,19 @@ function renderCartDrawer() {
                 }
                 <div class="is-total"><span>Total</span><strong>${money(cartTotal())}</strong></div>
               </div>
-              <p class="pedir-pay-hint">Pagas con Webpay. Si anulas en Transbank, no se cobra ni llega el pedido.</p>
+              <div class="pedir-entrega-toggle" role="group" aria-label="Método de pago">
+                <button type="button" class="${state.metodoPago === "webpay" ? "is-on" : ""}" data-pago="webpay">
+                  Webpay
+                </button>
+                <button type="button" class="${state.metodoPago === "tienda" ? "is-on" : ""}" data-pago="tienda">
+                  Pagar en tienda
+                </button>
+              </div>
+              <p class="pedir-pay-hint">${
+                state.metodoPago === "tienda"
+                  ? "El pedido llega al local ahora. Pagas al retirar."
+                  : "Pagas con Webpay. Si anulas en Transbank, no se cobra ni llega el pedido."
+              }</p>
               ${
                 !pedidosAbiertos()
                   ? `<p class="pedir-closed-msg">${escapeHtml(
@@ -943,10 +966,14 @@ function renderCartDrawer() {
               }>
                 ${
                   state.paying
-                    ? "Abriendo Webpay…"
+                    ? state.metodoPago === "tienda"
+                      ? "Enviando pedido…"
+                      : "Abriendo Webpay…"
                     : !pedidosAbiertos()
                       ? "Cerrado ahora"
-                      : `Pagar con Webpay · ${money(cartTotal())}`
+                      : state.metodoPago === "tienda"
+                        ? `Confirmar pedido · ${money(cartTotal())}`
+                        : `Pagar con Webpay · ${money(cartTotal())}`
                 }
               </button>
             </footer>`
@@ -1519,6 +1546,14 @@ function bind() {
       render();
       document.querySelector(".pedir-main")?.scrollTo?.(0, 0);
       window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  });
+
+  document.querySelectorAll("[data-pago]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      syncFormFromDom();
+      state.metodoPago = btn.dataset.pago === "tienda" ? "tienda" : "webpay";
+      render();
     });
   });
 

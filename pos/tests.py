@@ -587,7 +587,37 @@ class PedidosWebpayTests(BaseAPITest):
         pedido = Pedido.objects.get(pk=r.data["pedido_id"])
         self.assertEqual(pedido.estado, Pedido.Estado.ESPERANDO_PAGO)
         self.assertEqual(pedido.webpay_token, "tok-test-abc")
+        self.assertEqual(pedido.metodo_pago, "webpay")
         self.mock_create.assert_called_once()
+
+    def test_pagar_en_tienda_no_abre_webpay(self):
+        from pos.models import Pedido
+
+        self.mock_create.reset_mock()
+        r = self.client.post(
+            "/api/pedidos/",
+            self._payload(metodo_pago="tienda"),
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r.data["metodo_pago"], "tienda")
+        self.assertNotIn("url", r.data)
+        pedido = Pedido.objects.get(pk=r.data["pedido_id"])
+        self.assertEqual(pedido.estado, Pedido.Estado.EN_TIENDA)
+        self.assertEqual(pedido.metodo_pago, Pedido.MetodoPago.TIENDA)
+        self.mock_create.assert_not_called()
+
+        self.auth(self.cajero)
+        lista = self.client.get("/api/pedidos/")
+        self.assertEqual(lista.status_code, status.HTTP_200_OK)
+        ids = [p["id"] for p in lista.data["results"]] if "results" in lista.data else [
+            p["id"] for p in lista.data
+        ]
+        self.assertIn(pedido.pk, ids)
+        recibido = self.client.post(f"/api/pedidos/{pedido.pk}/recibir/")
+        self.assertEqual(recibido.status_code, status.HTTP_200_OK)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.Estado.RECIBIDO)
 
     def test_delivery_sin_direccion_rechazado(self):
         r = self.client.post(

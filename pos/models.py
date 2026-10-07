@@ -690,7 +690,9 @@ class Pedido(models.Model):
 
     """
 
-    Pedido web del cliente. Solo llega a cocina si Webpay autoriza el pago.
+    Pedido web del cliente.
+
+    Llega a cocina si Webpay autoriza el pago, o si el cliente elige pagar en tienda.
 
     """
 
@@ -702,9 +704,19 @@ class Pedido(models.Model):
 
         PAGADO = "pagado", "Pagado"
 
+        EN_TIENDA = "en_tienda", "Pagar en tienda"
+
         RECIBIDO = "recibido", "Recibido"
 
         RECHAZADO = "rechazado", "Rechazado"
+
+
+
+    class MetodoPago(models.TextChoices):
+
+        WEBPAY = "webpay", "Webpay"
+
+        TIENDA = "tienda", "Pagar en tienda"
 
 
 
@@ -755,6 +767,16 @@ class Pedido(models.Model):
         choices=Estado.choices,
 
         default=Estado.ESPERANDO_PAGO,
+
+    )
+
+    metodo_pago = models.CharField(
+
+        max_length=20,
+
+        choices=MetodoPago.choices,
+
+        default=MetodoPago.WEBPAY,
 
     )
 
