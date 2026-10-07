@@ -28,6 +28,7 @@ from rest_framework import mixins, serializers, status, viewsets
 
 from rest_framework.decorators import action
 
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 
 from rest_framework.response import Response
@@ -391,6 +392,12 @@ class MeView(APIView):
 
         return Response(CustomUserSerializer(request.user).data)
 
+class CartaPagination(PageNumberPagination):
+    """La carta entra en una sola página. El POS publicado solo lee la primera."""
+
+    page_size = 500
+
+
 class ProductoViewSet(viewsets.ModelViewSet):
 
     """
@@ -406,6 +413,8 @@ class ProductoViewSet(viewsets.ModelViewSet):
     serializer_class = ProductoSerializer
 
     permission_classes = [LecturaTodosEscrituraAdmin]
+
+    pagination_class = CartaPagination
 
     def get_queryset(self):
 
