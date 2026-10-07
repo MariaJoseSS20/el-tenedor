@@ -567,6 +567,11 @@ class PedidosWebpayTests(BaseAPITest):
         self.assertEqual(r.data[0]["nombre"], "Roll Test")
         self.assertNotIn("estado", r.data[0])
 
+    def test_api_v1_expone_la_misma_carta(self):
+        r = self.client.get("/api/v1/carta/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data[0]["nombre"], "Roll Test")
+
     def test_anonimo_no_lista_pedidos_ni_ventas(self):
         self.assertEqual(self.client.get("/api/pedidos/").status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertEqual(self.client.get("/api/ventas/").status_code, status.HTTP_401_UNAUTHORIZED)

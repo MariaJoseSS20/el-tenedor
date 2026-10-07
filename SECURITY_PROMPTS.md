@@ -49,3 +49,20 @@ Asignatura: Programación Backend — Guía API RESTful segura con DRF e IA.
 | PATCH | `/api/ventas/{id}/` | Anular (solo admin) |
 | POST | `/api/sync-ventas/` | Lote offline |
 | GET/POST | `/api/caja-diaria/` | Solo admin |
+
+Las mismas rutas están versionadas en `/api/v1/...` (criterio 3.1.4). `/api/...` se conserva porque la PWA publicada ya llama ese prefijo.
+
+## 3. CORS, secretos y sanitización (Criterio 3.1.2)
+
+* **Herramienta consultada:** Cursor
+* **Prompt utilizado:** "Audita esta API Django REST en tres puntos: restricción de CORS, almacenamiento de secretos en variables de entorno y sanitización de entradas. ¿Cómo evito inyección SQL, que el cliente fije precios o totales, y que alguien se registre como administrador?"
+
+* **Recomendaciones aplicadas:**
+
+| Recomendación de la IA | Implementación en El Tenedor |
+|------------------------|------------------------------|
+| Lista blanca de orígenes; no abrir CORS en producción | `CORS_ALLOWED_ORIGINS` desde el entorno. `CORS_ALLOW_ALL_ORIGINS` solo si `DEBUG` es verdadero (`config/settings.py`) |
+| Secretos fuera del código y `.env.example` sin claves reales | `python-dotenv` carga `.env`. Si `DEBUG=False` y `SECRET_KEY` sigue siendo la de desarrollo, el arranque falla. `.env.example` documenta las variables |
+| No usar SQL crudo | Consultas solo con el ORM de Django. No hay `raw()` ni `cursor.execute` |
+| Validar y no confiar en el JSON del cliente | `validate_precio`, `validate_cantidad`, `validate_detalles` y `validate_pagos` en `pos/serializers.py`. El total se recalcula en el servidor |
+| El registro público no puede escalar privilegios | `RegistroView` crea siempre `rol=cajero`. El administrador se asigna aparte |
