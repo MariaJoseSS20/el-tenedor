@@ -1004,3 +1004,20 @@ class RegistroYPaginacionTests(BaseAPITest):
         self.assertIn("count", r.data)
         self.assertTrue(any(p["nombre"] == "Roll Test" for p in r.data["results"]))
 
+    def test_login_reemplaza_el_hash_lento(self):
+        from django.contrib.auth.hashers import PBKDF2PasswordHasher
+
+        lento = PBKDF2PasswordHasher()
+        lento.iterations = 1_500_000
+        self.admin.password = lento.encode("ClaveLenta123", "salto-fijo")
+        self.admin.save(update_fields=["password"])
+
+        r = self.client.post(
+            "/api/token/",
+            {"username": "admin_test", "password": "ClaveLenta123"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.password.startswith("pbkdf2_sha256$100000$"))
+
