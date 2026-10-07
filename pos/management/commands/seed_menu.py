@@ -196,10 +196,11 @@ class Command(BaseCommand):
             )
             if created:
                 user.set_password(password)
-                user.rol = rol
-                user.is_staff = is_staff
-                user.save()
+            user.rol = rol
+            user.is_staff = is_staff
+            if rol == CustomUser.Rol.ADMINISTRADOR:
+                user.is_staff = True
+                user.is_superuser = True
+            user.save()
+            if created:
                 self.stdout.write(f"Usuario demo creado: {username} / {password}")
-            elif user.rol != rol:
-                user.rol = rol
-                user.save(update_fields=["rol"])
