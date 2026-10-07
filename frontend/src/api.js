@@ -99,6 +99,21 @@ function asList(data) {
   return [];
 }
 
+/** Sigue `next` hasta traer todas las páginas (la carta no cabe en las 50 primeras). */
+async function fetchAllPages(path) {
+  const data = await request(path);
+  if (Array.isArray(data)) return data;
+  const all = asList(data);
+  let next = data?.next;
+  while (next) {
+    const url = new URL(next, "http://local");
+    const page = await request(`${url.pathname}${url.search}`);
+    all.push(...asList(page));
+    next = page?.next;
+  }
+  return all;
+}
+
 async function refreshAccess(refresh) {
   try {
     const res = await fetch(`${API_BASE}/api/token/refresh/`, {
@@ -153,7 +168,7 @@ export async function register({
 
 export const api = {
   me: () => request("/api/me/"),
-  productos: () => request("/api/productos/").then(asList),
+  productos: () => fetchAllPages("/api/productos/"),
   crearProducto: (body) =>
     request("/api/productos/", { method: "POST", body: JSON.stringify(body) }),
   actualizarProducto: (id, body) =>
