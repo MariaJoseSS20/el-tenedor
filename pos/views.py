@@ -18,7 +18,7 @@ from django.conf import settings
 
 from django.db import IntegrityError, transaction
 
-from django.db.models import F, Sum
+from django.db.models import Count, F, Sum
 
 from django.shortcuts import redirect
 
@@ -41,6 +41,7 @@ from .models import (
     CajaDiaria,
     DetalleVenta,
     Egreso,
+    Gasto,
     HorarioPedidosWeb,
     Inventario,
     Pedido,
@@ -58,6 +59,8 @@ from .permissions import (
 
     PermisoEgresos,
 
+    PermisoGastos,
+
     PermisoVentas,
 
 )
@@ -72,6 +75,7 @@ from .serializers import (
 
     CustomUserSerializer,
     EgresoSerializer,
+    GastoSerializer,
     HorarioPedidosWebSerializer,
     InventarioSerializer,
 
@@ -1201,6 +1205,144 @@ class EgresoViewSet(
                 "total_egresos": totales["total_egresos"],
                 "efectivo_en_caja": totales["efectivo_en_caja"],
                 "cerrada": CajaDiaria.objects.filter(fecha=fecha).exists(),
+            }
+        )
+
+
+def _semana_de(fecha):
+    """Lunes y domingo de la semana que contiene `fecha`."""
+    from datetime import timedelta
+
+    lunes = fecha - timedelta(days=fecha.weekday())
+    return lunes, lunes + timedelta(days=6)
+
+
+class GastoViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Costos y gastos del negocio. NO afectan la caja.
+
+    - POST: cajero y administrador.
+    - GET: cajero ve los propios; administrador ve todos.
+      Filtros: ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
+    - PATCH {"estado": "anulado"}: solo administrador. No se borran.
+    - GET resumen-semanal/?fecha=YYYY-MM-DD: solo administrador.
+      Semana de lunes a domingo que contiene la fecha.
+    """
+
+    serializer_class = GastoSerializer
+    permission_classes = [PermisoGastos]
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
+    queryset = Gasto.objects.select_related("usuario")
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not getattr(user, "es_administrador", False):
+            qs = qs.filter(usuario=user)
+        if self.action == "list":
+            from datetime import date
+
+            for param, lookup in (("desde", "fecha__gte"), ("hasta", "fecha__lte")):
+                valor = self.request.query_params.get(param)
+                if not valor:
+                    continue
+                try:
+                    qs = qs.filter(**{lookup: date.fromisoformat(valor)})
+                except ValueError as exc:
+                    raise serializers.ValidationError(
+                        {"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}
+                    ) from exc
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(usuario=self.request.user)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Anulación (solo Administrador). Body: {"estado": "anulado"}."""
+        gasto = self.get_object()
+        if request.data.get("estado") != Gasto.Estado.ANULADO:
+            return Response(
+                {"detail": "Solo se permite cambiar el estado a 'anulado'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if gasto.estado == Gasto.Estado.ANULADO:
+            return Response(
+                {"detail": "El registro ya está anulado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        gasto.estado = Gasto.Estado.ANULADO
+        gasto.save(update_fields=["estado"])
+        return Response(self.get_serializer(gasto).data)
+
+    def update(self, request, *args, **kwargs):
+        if kwargs.get("partial"):
+            return self.partial_update(request, *args, **kwargs)
+        return Response(
+            {"detail": "Use PATCH con {\"estado\": \"anulado\"} para anular."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    @action(detail=False, methods=["get"], url_path="resumen-semanal")
+    def resumen_semanal(self, request):
+        """Ventas, costos, gastos y resultado de la semana (lunes a domingo)."""
+        try:
+            fecha = _parse_fecha_query(request)
+        except serializers.ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+
+        desde, hasta = _semana_de(fecha)
+        gastos = Gasto.objects.filter(
+            fecha__gte=desde,
+            fecha__lte=hasta,
+            estado=Gasto.Estado.ACTIVO,
+        )
+
+        total_costos = (
+            gastos.filter(tipo=Gasto.Tipo.COSTO).aggregate(t=Sum("monto"))["t"]
+            or Decimal("0.00")
+        )
+        total_gastos = (
+            gastos.filter(tipo=Gasto.Tipo.GASTO).aggregate(t=Sum("monto"))["t"]
+            or Decimal("0.00")
+        )
+        total_ventas = (
+            Venta.objects.filter(
+                fecha_hora__date__gte=desde,
+                fecha_hora__date__lte=hasta,
+                estado=Venta.Estado.COMPLETADA,
+            ).aggregate(t=Sum("total"))["t"]
+            or Decimal("0.00")
+        )
+
+        nombres_categoria = dict(Gasto.Categoria.choices)
+        por_categoria = [
+            {
+                "categoria": row["categoria"],
+                "nombre": nombres_categoria.get(row["categoria"], row["categoria"]),
+                "tipo": row["tipo"],
+                "monto": row["monto"],
+                "cantidad": row["cantidad"],
+            }
+            for row in gastos.values("categoria", "tipo")
+            .annotate(monto=Sum("monto"), cantidad=Count("id"))
+            .order_by("-monto")
+        ]
+
+        return Response(
+            {
+                "desde": desde,
+                "hasta": hasta,
+                "total_ventas": total_ventas,
+                "total_costos": total_costos,
+                "total_gastos": total_gastos,
+                "resultado": total_ventas - total_costos - total_gastos,
+                "por_categoria": por_categoria,
             }
         )
 

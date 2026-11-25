@@ -133,6 +133,10 @@ tipo_entrega: "retiro",
   /** Salidas de efectivo del día y efectivo disponible en caja. */
   egresos: [],
   efectivoCaja: null,
+  /** Costos y gastos (no afectan la caja), vista semanal. */
+  gastos: [],
+  gastosResumen: null,
+  gastosSemana: null,
   reporteFecha: fechaLocalHoy(),
   reporte: null,
   /** Confirmación salsa extra: { salsa } */
@@ -525,6 +529,7 @@ function shell(content) {
         </button>
         <button data-view="ventas" class="${state.view === "ventas" ? "active" : ""}">Historial</button>
         <button data-view="egresos" class="${state.view === "egresos" ? "active" : ""}">Egresos</button>
+        <button data-view="gastos" class="${state.view === "gastos" ? "active" : ""}">Costos y gastos</button>
         ${
           isAdmin
             ? `
@@ -2615,6 +2620,253 @@ function renderDelivery() {
   `;
 }
 
+const GASTO_TIPOS = [
+  ["costo", "Costo"],
+  ["gasto", "Gasto"],
+];
+
+const GASTO_CATEGORIAS = [
+  ["insumos", "Insumos / materia prima"],
+  ["empaques", "Empaques"],
+  ["sueldos", "Sueldos"],
+  ["arriendo", "Arriendo"],
+  ["servicios", "Servicios básicos"],
+  ["mantencion", "Mantención"],
+  ["transporte", "Transporte / delivery"],
+  ["marketing", "Publicidad"],
+  ["impuestos", "Impuestos y comisiones"],
+  ["otros", "Otros"],
+];
+
+const GASTO_MEDIOS = [
+  ["duena", "Pagado por la dueña"],
+  ["transferencia", "Transferencia"],
+  ["tarjeta", "Tarjeta"],
+  ["efectivo", "Efectivo (fuera de caja)"],
+  ["otro", "Otro"],
+];
+
+/** Suma días a una fecha YYYY-MM-DD sin problemas de zona horaria. */
+function sumarDias(ymd, dias) {
+  const [a, m, d] = ymd.split("-").map(Number);
+  const f = new Date(Date.UTC(a, m - 1, d + dias));
+  return f.toISOString().slice(0, 10);
+}
+
+/** Lunes de la semana que contiene la fecha YYYY-MM-DD. */
+function lunesDe(ymd) {
+  const [a, m, d] = ymd.split("-").map(Number);
+  const dow = new Date(Date.UTC(a, m - 1, d)).getUTCDay(); // 0 = domingo
+  return sumarDias(ymd, dow === 0 ? -6 : 1 - dow);
+}
+
+async function loadGastos() {
+  if (!state.gastosSemana) state.gastosSemana = lunesDe(fechaLocalHoy());
+  const desde = state.gastosSemana;
+  const hasta = sumarDias(desde, 6);
+  const isAdmin = state.user?.rol === "administrador";
+  const [gastos, resumen] = await Promise.all([
+    api.gastos({ desde, hasta }),
+    isAdmin ? api.resumenGastosSemana(desde) : Promise.resolve(null),
+  ]);
+  state.gastos = gastos;
+  state.gastosResumen = resumen;
+}
+
+function renderGastos() {
+  const isAdmin = state.user?.rol === "administrador";
+  const desde = state.gastosSemana || lunesDe(fechaLocalHoy());
+  const hasta = sumarDias(desde, 6);
+  const esSemanaActual = desde === lunesDe(fechaLocalHoy());
+  const r = state.gastosResumen;
+  const opciones = (lista, seleccion) =>
+    lista
+      .map(
+        ([v, t]) =>
+          `<option value="${v}" ${v === seleccion ? "selected" : ""}>${escapeHtml(t)}</option>`
+      )
+      .join("");
+
+  const filas = state.gastos
+    .map((g) => {
+      const anulado = g.estado === "anulado";
+      return `
+        <tr style="${anulado ? "opacity:.55" : ""}">
+          <td>${escapeHtml(formatFecha(g.fecha))}</td>
+          <td>${escapeHtml(g.tipo_display || g.tipo)}</td>
+          <td>${escapeHtml(g.categoria_display || g.categoria)}</td>
+          <td>
+            ${escapeHtml(g.descripcion)}
+            ${
+              g.proveedor || g.documento
+                ? `<div class="muted" style="font-size:.85rem">${escapeHtml(
+                    [g.proveedor, g.documento].filter(Boolean).join(" · ")
+                  )}</div>`
+                : ""
+            }
+          </td>
+          <td>${escapeHtml(g.medio_pago_display || g.medio_pago)}</td>
+          ${isAdmin ? `<td>${escapeHtml(g.usuario || "—")}</td>` : ""}
+          <td style="text-align:right">
+            <strong style="${anulado ? "text-decoration:line-through" : ""}">${money(g.monto)}</strong>
+            ${anulado ? `<div class="muted" style="font-size:.8rem">Anulado</div>` : ""}
+          </td>
+          ${
+            isAdmin
+              ? `<td>${
+                  anulado
+                    ? "—"
+                    : `<button class="btn btn-danger" data-anular-gasto="${g.id}" type="button" style="width:auto">Anular</button>`
+                }</td>`
+              : ""
+          }
+        </tr>
+      `;
+    })
+    .join("");
+
+  const filasCategoria = (r?.por_categoria || [])
+    .map(
+      (c) => `
+        <tr>
+          <td>${escapeHtml(c.nombre)}</td>
+          <td>${c.tipo === "costo" ? "Costo" : "Gasto"}</td>
+          <td style="text-align:center">${c.cantidad}</td>
+          <td style="text-align:right"><strong>${money(c.monto)}</strong></td>
+        </tr>`
+    )
+    .join("");
+
+  const columnas = isAdmin ? 8 : 6;
+
+  return `
+    <section class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap">
+        <div>
+          <h2 style="margin-bottom:4px">Costos y gastos</h2>
+          <p class="sub" style="margin:0">
+            Registro del negocio que <strong>no afecta la caja</strong>
+            (pagos de la dueña, transferencias, tarjeta…). Las salidas de efectivo de la caja van en Egresos.
+          </p>
+        </div>
+        <div class="row-actions" style="align-items:center;margin:0">
+          <button class="btn btn-ghost" id="btn-gastos-semana-ant" type="button" style="width:auto">‹ Semana anterior</button>
+          <strong>${escapeHtml(formatFecha(desde))} al ${escapeHtml(formatFecha(hasta))}</strong>
+          <button class="btn btn-ghost" id="btn-gastos-semana-sig" type="button" style="width:auto" ${
+            esSemanaActual ? "disabled" : ""
+          }>Semana siguiente ›</button>
+        </div>
+      </div>
+
+      ${
+        isAdmin && r
+          ? `
+            <div class="stats" style="margin-top:16px">
+              <div class="stat">
+                <div class="label">Ventas de la semana</div>
+                <div class="value">${money(r.total_ventas)}</div>
+              </div>
+              <div class="stat">
+                <div class="label">Costos</div>
+                <div class="value">− ${money(r.total_costos)}</div>
+              </div>
+              <div class="stat">
+                <div class="label">Gastos</div>
+                <div class="value">− ${money(r.total_gastos)}</div>
+              </div>
+              <div class="stat">
+                <div class="label">Resultado</div>
+                <div class="value" style="${Number(r.resultado) < 0 ? "color:var(--red, #c0392b)" : ""}">${money(r.resultado)}</div>
+              </div>
+            </div>
+          `
+          : ""
+      }
+
+      <h3 class="section-title" style="margin-top:24px">Registrar costo o gasto</h3>
+      <form id="form-gasto" class="row-actions" style="align-items:end;flex-wrap:wrap">
+        <div class="field" style="margin:0;min-width:140px">
+          <label for="gasto-fecha">Fecha</label>
+          <input id="gasto-fecha" type="date" value="${escapeHtml(fechaLocalHoy())}" max="${escapeHtml(fechaLocalHoy())}" required />
+        </div>
+        <div class="field" style="margin:0;min-width:110px">
+          <label for="gasto-tipo">Tipo</label>
+          <select id="gasto-tipo">${opciones(GASTO_TIPOS, "costo")}</select>
+        </div>
+        <div class="field" style="margin:0;min-width:180px">
+          <label for="gasto-categoria">Categoría</label>
+          <select id="gasto-categoria">${opciones(GASTO_CATEGORIAS, "insumos")}</select>
+        </div>
+        <div class="field" style="margin:0;flex:1;min-width:200px">
+          <label for="gasto-descripcion">Descripción</label>
+          <input id="gasto-descripcion" type="text" maxlength="255" placeholder="Ej. salmón, cuenta de luz…" required />
+        </div>
+        <div class="field" style="margin:0;min-width:120px">
+          <label for="gasto-monto">Monto</label>
+          <input id="gasto-monto" type="number" min="1" step="1" placeholder="Ej. 25000" required />
+        </div>
+        <div class="field" style="margin:0;min-width:190px">
+          <label for="gasto-medio">Cómo se pagó</label>
+          <select id="gasto-medio">${opciones(GASTO_MEDIOS, "duena")}</select>
+        </div>
+        <div class="field" style="margin:0;min-width:150px">
+          <label for="gasto-proveedor">Proveedor (opcional)</label>
+          <input id="gasto-proveedor" type="text" maxlength="120" />
+        </div>
+        <div class="field" style="margin:0;min-width:130px">
+          <label for="gasto-documento">N° boleta/factura</label>
+          <input id="gasto-documento" type="text" maxlength="60" />
+        </div>
+        <button class="btn btn-primary" type="submit" style="width:auto">Registrar</button>
+      </form>
+
+      ${
+        isAdmin && filasCategoria
+          ? `
+            <h3 class="section-title" style="margin-top:28px">Por categoría</h3>
+            <div style="overflow:auto">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Categoría</th>
+                    <th>Tipo</th>
+                    <th style="text-align:center">Registros</th>
+                    <th style="text-align:right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>${filasCategoria}</tbody>
+              </table>
+            </div>
+          `
+          : ""
+      }
+
+      <h3 class="section-title" style="margin-top:28px">
+        ${isAdmin ? "Detalle de la semana" : "Mis registros de la semana"}
+      </h3>
+      <div style="overflow:auto">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Categoría</th>
+              <th>Descripción</th>
+              <th>Pago</th>
+              ${isAdmin ? "<th>Usuario</th>" : ""}
+              <th style="text-align:right">Monto</th>
+              ${isAdmin ? "<th>Acciones</th>" : ""}
+            </tr>
+          </thead>
+          <tbody>
+            ${filas || `<tr><td colspan="${columnas}" class="muted">No hay registros esta semana.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 async function loadEgresos() {
   const fecha = fechaLocalHoy();
   const [egresos, efectivo] = await Promise.all([
@@ -3167,6 +3419,7 @@ function render() {
   if (state.view === "horario") content = renderHorario();
   if (state.view === "caja") content = renderCaja();
   if (state.view === "egresos") content = renderEgresos();
+  if (state.view === "gastos") content = renderGastos();
   if (state.view === "reportes") content = renderReportes();
 
   app.innerHTML = shell(content);
@@ -3218,6 +3471,7 @@ function bindShell() {
           state.reporte = await api.reporteDiario(state.reporteFecha);
         }
         if (state.view === "egresos") await loadEgresos();
+        if (state.view === "gastos") await loadGastos();
       } catch (e) {
         toast(e.message, true);
       }
@@ -4522,6 +4776,75 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
       toast(err.message, true);
     }
   });
+
+  document.getElementById("form-gasto")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const valor = (id) => document.getElementById(id).value.trim();
+    const monto = Number(valor("gasto-monto"));
+    const body = {
+      fecha: valor("gasto-fecha"),
+      tipo: valor("gasto-tipo"),
+      categoria: valor("gasto-categoria"),
+      descripcion: valor("gasto-descripcion"),
+      monto,
+      medio_pago: valor("gasto-medio"),
+      proveedor: valor("gasto-proveedor"),
+      documento: valor("gasto-documento"),
+    };
+
+    if (!body.fecha) {
+      toast("Indica la fecha", true);
+      return;
+    }
+    if (!Number.isFinite(monto) || monto <= 0) {
+      toast("Ingresa un monto mayor a 0", true);
+      return;
+    }
+    if (!body.descripcion) {
+      toast("Describe el costo o gasto", true);
+      return;
+    }
+
+    try {
+      await api.crearGasto(body);
+      state.gastosSemana = lunesDe(body.fecha);
+      await loadGastos();
+      toast(`Registrado: ${money(monto)}`);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  document.querySelectorAll("[data-anular-gasto]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Anular este registro?")) return;
+      try {
+        await api.anularGasto(btn.dataset.anularGasto);
+        await loadGastos();
+        toast("Registro anulado");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
+  for (const [id, dias] of [
+    ["btn-gastos-semana-ant", -7],
+    ["btn-gastos-semana-sig", 7],
+  ]) {
+    document.getElementById(id)?.addEventListener("click", async () => {
+      const base = state.gastosSemana || lunesDe(fechaLocalHoy());
+      state.gastosSemana = sumarDias(base, dias);
+      try {
+        await loadGastos();
+      } catch (err) {
+        toast(err.message, true);
+      }
+      render();
+    });
+  }
 
   document.querySelectorAll("[data-anular-egreso]").forEach((btn) => {
     btn.addEventListener("click", async () => {

@@ -14,6 +14,7 @@ from .models import (
     DetallePedido,
     DetalleVenta,
     Egreso,
+    Gasto,
     Inventario,
     PagoVenta,
     Pedido,
@@ -436,6 +437,56 @@ class EgresoSerializer(serializers.ModelSerializer):
         if not texto:
             raise serializers.ValidationError("Indica el motivo del egreso.")
         return texto
+
+
+class GastoSerializer(serializers.ModelSerializer):
+    """Costo o gasto del negocio. No afecta la caja."""
+
+    usuario = serializers.CharField(source="usuario.username", read_only=True)
+    tipo_display = serializers.CharField(source="get_tipo_display", read_only=True)
+    categoria_display = serializers.CharField(
+        source="get_categoria_display", read_only=True
+    )
+    medio_pago_display = serializers.CharField(
+        source="get_medio_pago_display", read_only=True
+    )
+
+    class Meta:
+        model = Gasto
+        fields = (
+            "id",
+            "fecha",
+            "tipo",
+            "tipo_display",
+            "categoria",
+            "categoria_display",
+            "descripcion",
+            "monto",
+            "medio_pago",
+            "medio_pago_display",
+            "proveedor",
+            "documento",
+            "usuario",
+            "estado",
+            "creado_en",
+        )
+        read_only_fields = ("usuario", "estado", "creado_en")
+
+    def validate_monto(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("El monto debe ser mayor a 0.")
+        return value
+
+    def validate_descripcion(self, value):
+        texto = (value or "").strip()
+        if not texto:
+            raise serializers.ValidationError("Describe el costo o gasto.")
+        return texto
+
+    def validate_fecha(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("La fecha no puede ser futura.")
+        return value
 
 
 class CajaDiariaCierreSerializer(serializers.Serializer):

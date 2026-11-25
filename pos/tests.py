@@ -19,6 +19,7 @@ from pos.models import (
     CajaDiaria,
     CustomUser,
     Egreso,
+    Gasto,
     Inventario,
     Producto,
     Venta,
@@ -1195,4 +1196,163 @@ class EgresoTests(BaseAPITest):
         ).data
         r = self.client.delete(f"/api/egresos/{egreso['id']}/")
         self.assertEqual(r.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+class GastoTests(BaseAPITest):
+    """Costos y gastos: registro aparte que no afecta la caja."""
+
+    def payload(self, **extra):
+        data = {
+            "fecha": str(timezone.localdate()),
+            "tipo": "costo",
+            "categoria": "insumos",
+            "descripcion": "Salmón para la semana",
+            "monto": "45000",
+            "medio_pago": "duena",
+            "proveedor": "Pesquera Sur",
+            "documento": "F-1234",
+        }
+        data.update(extra)
+        return data
+
+    def test_cajero_y_admin_registran(self):
+        self.auth(self.cajero)
+        r = self.client.post("/api/gastos/", self.payload(), format="json")
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r.data["usuario"], self.cajero.username)
+        self.assertEqual(r.data["estado"], "activo")
+
+        self.auth(self.admin)
+        r = self.client.post(
+            "/api/v1/gastos/",
+            self.payload(tipo="gasto", categoria="arriendo", descripcion="Arriendo local"),
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+
+    def test_gasto_no_afecta_caja(self):
+        self.auth(self.cajero)
+        self.client.post(
+            "/api/ventas/",
+            {
+                "metodo_pago": "efectivo",
+                "tipo_entrega": "retiro",
+                "cobro_delivery": "0",
+                "detalles": [{"producto": self.producto.id, "cantidad": 1}],
+            },
+            format="json",
+        )
+        self.client.post(
+            "/api/gastos/",
+            self.payload(monto="3000", medio_pago="efectivo"),
+            format="json",
+        )
+        r = self.client.get("/api/egresos/efectivo-disponible/")
+        self.assertEqual(Decimal(r.data["efectivo_en_caja"]), Decimal("5000.00"))
+        self.assertEqual(Decimal(r.data["total_egresos"]), Decimal("0.00"))
+
+    def test_gasto_puede_superar_efectivo_y_ser_de_dias_anteriores(self):
+        self.auth(self.cajero)
+        ayer = timezone.localdate() - timedelta(days=1)
+        r = self.client.post(
+            "/api/gastos/",
+            self.payload(fecha=str(ayer), monto="999999"),
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+
+    def test_validaciones(self):
+        self.auth(self.cajero)
+        manana = timezone.localdate() + timedelta(days=1)
+        for extra in (
+            {"monto": "0"},
+            {"descripcion": "   "},
+            {"fecha": str(manana)},
+            {"tipo": "otro"},
+            {"categoria": "inexistente"},
+        ):
+            r = self.client.post("/api/gastos/", self.payload(**extra), format="json")
+            self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST, extra)
+        self.assertEqual(Gasto.objects.count(), 0)
+
+    def test_cajero_ve_solo_los_suyos_y_no_anula_ni_ve_resumen(self):
+        self.auth(self.admin)
+        del_admin = self.client.post("/api/gastos/", self.payload(), format="json").data
+        self.auth(self.cajero)
+        propio = self.client.post("/api/gastos/", self.payload(), format="json").data
+
+        r = self.client.get("/api/gastos/")
+        self.assertEqual([g["id"] for g in r.data["results"]], [propio["id"]])
+        r = self.client.get(f"/api/gastos/{del_admin['id']}/")
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+        r = self.client.patch(
+            f"/api/gastos/{propio['id']}/", {"estado": "anulado"}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+        r = self.client.get("/api/gastos/resumen-semanal/")
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_anula_y_no_se_borra(self):
+        self.auth(self.admin)
+        g = self.client.post("/api/gastos/", self.payload(), format="json").data
+        r = self.client.patch(f"/api/gastos/{g['id']}/", {"estado": "anulado"}, format="json")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["estado"], "anulado")
+        r = self.client.delete(f"/api/gastos/{g['id']}/")
+        self.assertEqual(r.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_filtro_por_rango(self):
+        self.auth(self.admin)
+        hoy = timezone.localdate()
+        self.client.post("/api/gastos/", self.payload(), format="json")
+        self.client.post(
+            "/api/gastos/",
+            self.payload(fecha=str(hoy - timedelta(days=10))),
+            format="json",
+        )
+        r = self.client.get(f"/api/gastos/?desde={hoy - timedelta(days=2)}&hasta={hoy}")
+        self.assertEqual(r.data["count"], 1)
+
+    def test_resumen_semanal(self):
+        hoy = timezone.localdate()
+        lunes = hoy - timedelta(days=hoy.weekday())
+        self.auth(self.cajero)
+        self.client.post(
+            "/api/ventas/",
+            {
+                "metodo_pago": "efectivo",
+                "tipo_entrega": "retiro",
+                "cobro_delivery": "0",
+                "detalles": [{"producto": self.producto.id, "cantidad": 10}],
+            },
+            format="json",
+        )  # 50.000
+        self.auth(self.admin)
+        self.client.post("/api/gastos/", self.payload(monto="20000"), format="json")
+        self.client.post(
+            "/api/gastos/",
+            self.payload(tipo="gasto", categoria="servicios", monto="8000"),
+            format="json",
+        )
+        anulado = self.client.post(
+            "/api/gastos/", self.payload(monto="1000"), format="json"
+        ).data
+        self.client.patch(
+            f"/api/gastos/{anulado['id']}/", {"estado": "anulado"}, format="json"
+        )
+        # Semana anterior: no debe contar
+        self.client.post(
+            "/api/gastos/",
+            self.payload(fecha=str(lunes - timedelta(days=1)), monto="7777"),
+            format="json",
+        )
+
+        r = self.client.get(f"/api/gastos/resumen-semanal/?fecha={hoy}")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(r.data["desde"]), str(lunes))
+        self.assertEqual(Decimal(r.data["total_ventas"]), Decimal("50000.00"))
+        self.assertEqual(Decimal(r.data["total_costos"]), Decimal("20000.00"))
+        self.assertEqual(Decimal(r.data["total_gastos"]), Decimal("8000.00"))
+        self.assertEqual(Decimal(r.data["resultado"]), Decimal("22000.00"))
+        self.assertEqual(len(r.data["por_categoria"]), 2)
 

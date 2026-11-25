@@ -114,3 +114,30 @@ class PermisoEgresos(BasePermission):
         if request.method in SAFE_METHODS:
             return obj.usuario_id == user.id
         return False
+
+
+class PermisoGastos(BasePermission):
+    """
+    Costos y gastos (no afectan la caja).
+
+    - Registrar y ver los propios: cajero y administrador.
+    - Ver todos, resumen semanal y anular: solo administrador.
+    """
+
+    message = "Solo el Administrador puede realizar esta acción sobre costos y gastos."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "es_administrador", False):
+            return True
+        if getattr(view, "action", None) == "resumen_semanal":
+            return False
+        return request.method in SAFE_METHODS or request.method == "POST"
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if getattr(user, "es_administrador", False):
+            return True
+        return request.method in SAFE_METHODS and obj.usuario_id == user.id

@@ -226,6 +226,24 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ estado: "anulado" }),
     }),
+  gastos: ({ desde, hasta } = {}) => {
+    const params = new URLSearchParams();
+    if (desde) params.set("desde", desde);
+    if (hasta) params.set("hasta", hasta);
+    const q = params.toString() ? `?${params}` : "";
+    return fetchAllPages(`/api/gastos/${q}`);
+  },
+  crearGasto: (body) =>
+    request("/api/gastos/", { method: "POST", body: JSON.stringify(body) }),
+  anularGasto: (id) =>
+    request(`/api/gastos/${id}/`, {
+      method: "PATCH",
+      body: JSON.stringify({ estado: "anulado" }),
+    }),
+  resumenGastosSemana: (fecha) => {
+    const q = fecha ? `?fecha=${fecha}` : "";
+    return request(`/api/gastos/resumen-semanal/${q}`);
+  },
   efectivoDisponible: (fecha) => {
     const q = fecha ? `?fecha=${fecha}` : "";
     return request(`/api/egresos/efectivo-disponible/${q}`);

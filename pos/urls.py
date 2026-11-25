@@ -9,6 +9,7 @@ from .views import (
     CajaDiariaViewSet,
     CartaView,
     EgresoViewSet,
+    GastoViewSet,
     HorarioPedidosConfigView,
     HorarioPedidosView,
     InventarioViewSet,
@@ -28,6 +29,7 @@ router.register(r"productos", ProductoViewSet, basename="producto")
 router.register(r"inventario", InventarioViewSet, basename="inventario")
 router.register(r"ventas", VentaViewSet, basename="venta")
 router.register(r"egresos", EgresoViewSet, basename="egreso")
+router.register(r"gastos", GastoViewSet, basename="gasto")
 router.register(r"caja-diaria", CajaDiariaViewSet, basename="caja-diaria")
 router.register(r"pedidos", PedidoViewSet, basename="pedido")
 router.register(r"zonas-delivery", ZonaDeliveryViewSet, basename="zona-delivery")

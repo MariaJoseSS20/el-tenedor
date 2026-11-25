@@ -737,6 +737,80 @@ class Egreso(models.Model):
         return f"Egreso #{self.pk} — {self.monto} ({self.get_estado_display()})"
 
 
+class Gasto(models.Model):
+    """
+    Costo o gasto del negocio (control administrativo).
+
+    NO afecta la caja: sirve para registrar pagos hechos por la dueña,
+    transferencias, tarjeta, etc. Las salidas de efectivo de la caja
+    se registran aparte como Egreso.
+    """
+
+    class Tipo(models.TextChoices):
+        COSTO = "costo", "Costo"
+        GASTO = "gasto", "Gasto"
+
+    class Categoria(models.TextChoices):
+        INSUMOS = "insumos", "Insumos / materia prima"
+        EMPAQUES = "empaques", "Empaques"
+        SUELDOS = "sueldos", "Sueldos"
+        ARRIENDO = "arriendo", "Arriendo"
+        SERVICIOS = "servicios", "Servicios básicos"
+        MANTENCION = "mantencion", "Mantención"
+        TRANSPORTE = "transporte", "Transporte / delivery"
+        MARKETING = "marketing", "Publicidad"
+        IMPUESTOS = "impuestos", "Impuestos y comisiones"
+        OTROS = "otros", "Otros"
+
+    class MedioPago(models.TextChoices):
+        DUENA = "duena", "Pagado por la dueña"
+        TRANSFERENCIA = "transferencia", "Transferencia"
+        TARJETA = "tarjeta", "Tarjeta"
+        EFECTIVO = "efectivo", "Efectivo (fuera de caja)"
+        OTRO = "otro", "Otro"
+
+    class Estado(models.TextChoices):
+        ACTIVO = "activo", "Activo"
+        ANULADO = "anulado", "Anulado"
+
+    fecha = models.DateField(default=timezone.localdate)
+    tipo = models.CharField(max_length=10, choices=Tipo.choices)
+    categoria = models.CharField(max_length=20, choices=Categoria.choices)
+    descripcion = models.CharField(max_length=255)
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    medio_pago = models.CharField(
+        max_length=20,
+        choices=MedioPago.choices,
+        default=MedioPago.DUENA,
+    )
+    proveedor = models.CharField(max_length=120, blank=True, default="")
+    documento = models.CharField(
+        max_length=60,
+        blank=True,
+        default="",
+        help_text="N° de boleta o factura (opcional).",
+    )
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="gastos",
+    )
+    estado = models.CharField(
+        max_length=10,
+        choices=Estado.choices,
+        default=Estado.ACTIVO,
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-fecha", "-creado_en"]
+        verbose_name = "costo o gasto"
+        verbose_name_plural = "costos y gastos"
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} #{self.pk} — {self.monto} ({self.fecha})"
+
+
 class Pedido(models.Model):
 
     """

@@ -10,6 +10,7 @@ from .models import (
     DetallePedido,
     DetalleVenta,
     Egreso,
+    Gasto,
     HorarioPedidosWeb,
     Inventario,
     Pedido,
@@ -287,3 +288,25 @@ class EgresoAdmin(admin.ModelAdmin):
     @admin.display(description="Monto", ordering="monto")
     def monto_pesos(self, obj):
         return pesos(obj.monto)
+
+
+@admin.register(Gasto)
+class GastoAdmin(admin.ModelAdmin):
+    list_display = (
+        "fecha",
+        "tipo",
+        "categoria",
+        "descripcion",
+        "monto_pesos",
+        "medio_pago",
+        "usuario",
+        "estado",
+    )
+    list_filter = ("tipo", "categoria", "medio_pago", "estado", "fecha")
+    search_fields = ("descripcion", "proveedor", "documento", "usuario__username")
+    readonly_fields = ("creado_en",)
+
+    @admin.display(description="Monto", ordering="monto")
+    def monto_pesos(self, obj):
+        return pesos(obj.monto)
+
