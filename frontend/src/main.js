@@ -136,7 +136,13 @@ tipo_entrega: "retiro",
   /** Costos y gastos (no afectan la caja), vista semanal. */
   gastos: [],
   gastosResumen: null,
-  gastosSemana: null,
+  /** Período: "dia" | "semana" | "mes" | "rango". */
+  gastosPeriodo: "semana",
+  /** Fecha de referencia YYYY-MM-DD para día / semana / mes. */
+  gastosRef: null,
+  gastosDesde: null,
+  gastosHasta: null,
+  gastosFiltro: { tipo: "", categoria: "", medio_pago: "" },
   reporteFecha: fechaLocalHoy(),
   reporte: null,
   /** Confirmación salsa extra: { salsa } */
@@ -2660,14 +2666,59 @@ function lunesDe(ymd) {
   return sumarDias(ymd, dow === 0 ? -6 : 1 - dow);
 }
 
+const MESES = [
+  "enero", "febrero", "marzo", "abril", "mayo", "junio",
+  "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+];
+
+/** Rango { desde, hasta } según el período elegido en Costos y gastos. */
+function rangoGastos() {
+  const ref = state.gastosRef || fechaLocalHoy();
+  const p = state.gastosPeriodo;
+  if (p === "dia") return { desde: ref, hasta: ref };
+  if (p === "mes") {
+    const [a, m] = ref.split("-").map(Number);
+    const desde = `${a}-${String(m).padStart(2, "0")}-01`;
+    const hasta = new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10);
+    return { desde, hasta };
+  }
+  if (p === "rango") {
+    const desde = state.gastosDesde || lunesDe(fechaLocalHoy());
+    const hasta = state.gastosHasta || fechaLocalHoy();
+    return { desde, hasta };
+  }
+  const desde = lunesDe(ref);
+  return { desde, hasta: sumarDias(desde, 6) };
+}
+
+function etiquetaPeriodoGastos() {
+  const { desde, hasta } = rangoGastos();
+  if (state.gastosPeriodo === "dia") return formatFecha(desde);
+  if (state.gastosPeriodo === "mes") {
+    const [a, m] = desde.split("-").map(Number);
+    const nombre = MESES[m - 1];
+    return `${nombre.charAt(0).toUpperCase()}${nombre.slice(1)} ${a}`;
+  }
+  return `${formatFecha(desde)} al ${formatFecha(hasta)}`;
+}
+
+/** Avanza o retrocede un día, semana o mes. */
+function moverPeriodoGastos(dir) {
+  const ref = state.gastosRef || fechaLocalHoy();
+  if (state.gastosPeriodo === "dia") state.gastosRef = sumarDias(ref, dir);
+  else if (state.gastosPeriodo === "semana") state.gastosRef = sumarDias(ref, 7 * dir);
+  else if (state.gastosPeriodo === "mes") {
+    const [a, m] = ref.split("-").map(Number);
+    state.gastosRef = new Date(Date.UTC(a, m - 1 + dir, 1)).toISOString().slice(0, 10);
+  }
+}
+
 async function loadGastos() {
-  if (!state.gastosSemana) state.gastosSemana = lunesDe(fechaLocalHoy());
-  const desde = state.gastosSemana;
-  const hasta = sumarDias(desde, 6);
+  const { desde, hasta } = rangoGastos();
   const isAdmin = state.user?.rol === "administrador";
   const [gastos, resumen] = await Promise.all([
-    api.gastos({ desde, hasta }),
-    isAdmin ? api.resumenGastosSemana(desde) : Promise.resolve(null),
+    api.gastos({ desde, hasta, ...state.gastosFiltro }),
+    isAdmin ? api.resumenGastos(desde, hasta) : Promise.resolve(null),
   ]);
   state.gastos = gastos;
   state.gastosResumen = resumen;
@@ -2675,9 +2726,15 @@ async function loadGastos() {
 
 function renderGastos() {
   const isAdmin = state.user?.rol === "administrador";
-  const desde = state.gastosSemana || lunesDe(fechaLocalHoy());
-  const hasta = sumarDias(desde, 6);
-  const esSemanaActual = desde === lunesDe(fechaLocalHoy());
+  const { desde, hasta } = rangoGastos();
+  const periodo = state.gastosPeriodo;
+  const hoy = fechaLocalHoy();
+  const enPeriodoActual = periodo !== "rango" && hasta >= hoy;
+  const filtro = state.gastosFiltro;
+  const hayFiltro = Boolean(filtro.tipo || filtro.categoria || filtro.medio_pago);
+  const totalLista = state.gastos
+    .filter((g) => g.estado !== "anulado")
+    .reduce((acc, g) => acc + Number(g.monto || 0), 0);
   const r = state.gastosResumen;
   const opciones = (lista, seleccion) =>
     lista
@@ -2749,13 +2806,50 @@ function renderGastos() {
             (pagos de la dueña, transferencias, tarjeta…). Las salidas de efectivo de la caja van en Egresos.
           </p>
         </div>
-        <div class="row-actions" style="align-items:center;margin:0">
-          <button class="btn btn-ghost" id="btn-gastos-semana-ant" type="button" style="width:auto">‹ Semana anterior</button>
-          <strong>${escapeHtml(formatFecha(desde))} al ${escapeHtml(formatFecha(hasta))}</strong>
-          <button class="btn btn-ghost" id="btn-gastos-semana-sig" type="button" style="width:auto" ${
-            esSemanaActual ? "disabled" : ""
-          }>Semana siguiente ›</button>
+      </div>
+
+      <div class="row-actions" style="align-items:end;flex-wrap:wrap;margin-top:16px">
+        <div class="row-actions" style="margin:0;gap:6px">
+          ${[
+            ["dia", "Día"],
+            ["semana", "Semana"],
+            ["mes", "Mes"],
+            ["rango", "Rango de fechas"],
+          ]
+            .map(
+              ([v, t]) =>
+                `<button class="btn ${periodo === v ? "btn-primary" : "btn-ghost"}" data-gastos-periodo="${v}" type="button" style="width:auto">${t}</button>`
+            )
+            .join("")}
         </div>
+        ${
+          periodo === "rango"
+            ? `
+              <div class="field" style="margin:0">
+                <label for="gastos-desde">Desde</label>
+                <input id="gastos-desde" type="date" value="${escapeHtml(desde)}" />
+              </div>
+              <div class="field" style="margin:0">
+                <label for="gastos-hasta">Hasta</label>
+                <input id="gastos-hasta" type="date" value="${escapeHtml(hasta)}" />
+              </div>
+              <button class="btn btn-mint" id="btn-gastos-aplicar-rango" type="button" style="width:auto">Ver</button>
+            `
+            : `
+              <div class="row-actions" style="align-items:center;margin:0">
+                <button class="btn btn-ghost" id="btn-gastos-ant" type="button" style="width:auto" aria-label="Período anterior">‹</button>
+                <strong style="min-width:150px;text-align:center">${escapeHtml(etiquetaPeriodoGastos())}</strong>
+                <button class="btn btn-ghost" id="btn-gastos-sig" type="button" style="width:auto" aria-label="Período siguiente" ${
+                  enPeriodoActual ? "disabled" : ""
+                }>›</button>
+                ${
+                  enPeriodoActual
+                    ? ""
+                    : `<button class="btn btn-ghost" id="btn-gastos-hoy" type="button" style="width:auto">Hoy</button>`
+                }
+              </div>
+            `
+        }
       </div>
 
       ${
@@ -2763,7 +2857,7 @@ function renderGastos() {
           ? `
             <div class="stats" style="margin-top:16px">
               <div class="stat">
-                <div class="label">Ventas de la semana</div>
+                <div class="label">Ventas del período</div>
                 <div class="value">${money(r.total_ventas)}</div>
               </div>
               <div class="stat">
@@ -2842,8 +2936,33 @@ function renderGastos() {
       }
 
       <h3 class="section-title" style="margin-top:28px">
-        ${isAdmin ? "Detalle de la semana" : "Mis registros de la semana"}
+        ${isAdmin ? "Detalle del período" : "Mis registros del período"}
       </h3>
+      <div class="row-actions" style="align-items:end;flex-wrap:wrap;margin-bottom:12px">
+        <div class="field" style="margin:0;min-width:120px">
+          <label for="filtro-gasto-tipo">Tipo</label>
+          <select id="filtro-gasto-tipo" data-filtro-gasto="tipo">
+            <option value="">Todos</option>${opciones(GASTO_TIPOS, filtro.tipo)}
+          </select>
+        </div>
+        <div class="field" style="margin:0;min-width:180px">
+          <label for="filtro-gasto-categoria">Categoría</label>
+          <select id="filtro-gasto-categoria" data-filtro-gasto="categoria">
+            <option value="">Todas</option>${opciones(GASTO_CATEGORIAS, filtro.categoria)}
+          </select>
+        </div>
+        <div class="field" style="margin:0;min-width:180px">
+          <label for="filtro-gasto-medio">Cómo se pagó</label>
+          <select id="filtro-gasto-medio" data-filtro-gasto="medio_pago">
+            <option value="">Todos</option>${opciones(GASTO_MEDIOS, filtro.medio_pago)}
+          </select>
+        </div>
+        ${
+          hayFiltro
+            ? `<button class="btn btn-ghost" id="btn-gastos-limpiar-filtros" type="button" style="width:auto">Quitar filtros</button>`
+            : ""
+        }
+      </div>
       <div style="overflow:auto">
         <table class="table">
           <thead>
@@ -2859,8 +2978,19 @@ function renderGastos() {
             </tr>
           </thead>
           <tbody>
-            ${filas || `<tr><td colspan="${columnas}" class="muted">No hay registros esta semana.</td></tr>`}
+            ${filas || `<tr><td colspan="${columnas}" class="muted">No hay registros en este período${hayFiltro ? " con esos filtros" : ""}.</td></tr>`}
           </tbody>
+          ${
+            filas
+              ? `<tfoot>
+                  <tr>
+                    <td colspan="${isAdmin ? 6 : 5}"><strong>Total${hayFiltro ? " filtrado" : ""}</strong></td>
+                    <td style="text-align:right"><strong>${money(totalLista)}</strong></td>
+                    ${isAdmin ? "<td></td>" : ""}
+                  </tr>
+                </tfoot>`
+              : ""
+          }
         </table>
       </div>
     </section>
@@ -4807,7 +4937,15 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
 
     try {
       await api.crearGasto(body);
-      state.gastosSemana = lunesDe(body.fecha);
+      const { desde, hasta } = rangoGastos();
+      if (body.fecha < desde || body.fecha > hasta) {
+        if (state.gastosPeriodo === "rango") {
+          state.gastosDesde = body.fecha < desde ? body.fecha : desde;
+          state.gastosHasta = body.fecha > hasta ? body.fecha : hasta;
+        } else {
+          state.gastosRef = body.fecha;
+        }
+      }
       await loadGastos();
       toast(`Registrado: ${money(monto)}`);
       render();
@@ -4830,21 +4968,73 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     });
   });
 
-  for (const [id, dias] of [
-    ["btn-gastos-semana-ant", -7],
-    ["btn-gastos-semana-sig", 7],
-  ]) {
-    document.getElementById(id)?.addEventListener("click", async () => {
-      const base = state.gastosSemana || lunesDe(fechaLocalHoy());
-      state.gastosSemana = sumarDias(base, dias);
-      try {
-        await loadGastos();
-      } catch (err) {
-        toast(err.message, true);
+  const recargarGastos = async () => {
+    try {
+      await loadGastos();
+    } catch (err) {
+      toast(err.message, true);
+    }
+    render();
+  };
+
+  document.querySelectorAll("[data-gastos-periodo]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const nuevo = btn.dataset.gastosPeriodo;
+      if (nuevo === "rango" && state.gastosPeriodo !== "rango") {
+        const actual = rangoGastos();
+        state.gastosDesde = actual.desde;
+        state.gastosHasta = actual.hasta;
       }
-      render();
+      state.gastosPeriodo = nuevo;
+      recargarGastos();
     });
-  }
+  });
+
+  document.getElementById("btn-gastos-ant")?.addEventListener("click", () => {
+    moverPeriodoGastos(-1);
+    recargarGastos();
+  });
+
+  document.getElementById("btn-gastos-sig")?.addEventListener("click", () => {
+    moverPeriodoGastos(1);
+    recargarGastos();
+  });
+
+  document.getElementById("btn-gastos-hoy")?.addEventListener("click", () => {
+    state.gastosRef = fechaLocalHoy();
+    recargarGastos();
+  });
+
+  document.getElementById("btn-gastos-aplicar-rango")?.addEventListener("click", () => {
+    const desde = document.getElementById("gastos-desde").value;
+    const hasta = document.getElementById("gastos-hasta").value;
+    if (!desde || !hasta) {
+      toast("Elige las dos fechas", true);
+      return;
+    }
+    if (desde > hasta) {
+      toast("La fecha 'desde' debe ser anterior a 'hasta'", true);
+      return;
+    }
+    state.gastosDesde = desde;
+    state.gastosHasta = hasta;
+    recargarGastos();
+  });
+
+  document.querySelectorAll("[data-filtro-gasto]").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      state.gastosFiltro = {
+        ...state.gastosFiltro,
+        [sel.dataset.filtroGasto]: sel.value,
+      };
+      recargarGastos();
+    });
+  });
+
+  document.getElementById("btn-gastos-limpiar-filtros")?.addEventListener("click", () => {
+    state.gastosFiltro = { tipo: "", categoria: "", medio_pago: "" };
+    recargarGastos();
+  });
 
   document.querySelectorAll("[data-anular-egreso]").forEach((btn) => {
     btn.addEventListener("click", async () => {

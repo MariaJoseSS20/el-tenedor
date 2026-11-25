@@ -78,9 +78,10 @@ Prefijo oficial: **`/api/v1/`**. Las mismas rutas responden también en `/api/` 
 | GET/POST | `/api/v1/egresos/` | Cajero y admin. Salidas de efectivo; se descuentan de la caja. Cajero ve los propios. Filtro `?fecha=` |
 | PATCH | `/api/v1/egresos/{id}/` | Anular con `{"estado":"anulado"}`. Solo admin |
 | GET | `/api/v1/egresos/efectivo-disponible/?fecha=YYYY-MM-DD` | Cajero y admin. Efectivo de ventas − egresos |
-| GET/POST | `/api/v1/gastos/` | Cajero y admin. Costos y gastos que **no** afectan la caja. Cajero ve los propios. Filtros `?desde=&hasta=` |
+| GET/POST | `/api/v1/gastos/` | Cajero y admin. Costos y gastos que **no** afectan la caja. Cajero ve los propios. Filtros `?desde=&hasta=&tipo=&categoria=&medio_pago=` |
 | PATCH | `/api/v1/gastos/{id}/` | Anular con `{"estado":"anulado"}`. Solo admin |
-| GET | `/api/v1/gastos/resumen-semanal/?fecha=YYYY-MM-DD` | Solo admin. Ventas, costos, gastos y resultado de la semana (lunes a domingo) |
+| GET | `/api/v1/gastos/resumen/?desde=YYYY-MM-DD&hasta=YYYY-MM-DD` | Solo admin. Ventas, costos, gastos y resultado del período (día, semana, mes o rango) |
+| GET | `/api/v1/gastos/resumen-semanal/?fecha=YYYY-MM-DD` | Solo admin. Atajo de la semana (lunes a domingo) |
 | GET/POST | `/api/v1/caja-diaria/` | Solo admin. Listado paginado |
 | GET | `/api/v1/caja-diaria/preview/` | Solo admin |
 | GET | `/api/v1/reportes/diario/?fecha=YYYY-MM-DD` | Solo admin |

@@ -226,10 +226,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ estado: "anulado" }),
     }),
-  gastos: ({ desde, hasta } = {}) => {
+  gastos: (filtros = {}) => {
     const params = new URLSearchParams();
-    if (desde) params.set("desde", desde);
-    if (hasta) params.set("hasta", hasta);
+    for (const [k, v] of Object.entries(filtros)) {
+      if (v) params.set(k, v);
+    }
     const q = params.toString() ? `?${params}` : "";
     return fetchAllPages(`/api/gastos/${q}`);
   },
@@ -240,10 +241,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ estado: "anulado" }),
     }),
-  resumenGastosSemana: (fecha) => {
-    const q = fecha ? `?fecha=${fecha}` : "";
-    return request(`/api/gastos/resumen-semanal/${q}`);
-  },
+  resumenGastos: (desde, hasta) =>
+    request(`/api/gastos/resumen/?desde=${desde}&hasta=${hasta}`),
   efectivoDisponible: (fecha) => {
     const q = fecha ? `?fecha=${fecha}` : "";
     return request(`/api/egresos/efectivo-disponible/${q}`);

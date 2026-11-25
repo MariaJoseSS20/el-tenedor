@@ -1231,8 +1231,9 @@ class GastoViewSet(
     - GET: cajero ve los propios; administrador ve todos.
       Filtros: ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
     - PATCH {"estado": "anulado"}: solo administrador. No se borran.
-    - GET resumen-semanal/?fecha=YYYY-MM-DD: solo administrador.
-      Semana de lunes a domingo que contiene la fecha.
+    - GET resumen/?desde=&hasta=: solo administrador (día, semana, mes o rango).
+    - GET resumen-semanal/?fecha=YYYY-MM-DD: atajo de la semana (lunes a domingo).
+    - Filtros de listado: ?tipo=&categoria=&medio_pago=&estado=
     """
 
     serializer_class = GastoSerializer
@@ -1248,8 +1249,9 @@ class GastoViewSet(
         if self.action == "list":
             from datetime import date
 
+            params = self.request.query_params
             for param, lookup in (("desde", "fecha__gte"), ("hasta", "fecha__lte")):
-                valor = self.request.query_params.get(param)
+                valor = params.get(param)
                 if not valor:
                     continue
                 try:
@@ -1258,6 +1260,10 @@ class GastoViewSet(
                     raise serializers.ValidationError(
                         {"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}
                     ) from exc
+            for campo in ("tipo", "categoria", "medio_pago", "estado"):
+                valor = params.get(campo)
+                if valor:
+                    qs = qs.filter(**{campo: valor})
         return qs
 
     def perform_create(self, serializer):
@@ -1288,63 +1294,88 @@ class GastoViewSet(
             status=status.HTTP_405_METHOD_NOT_ALLOWED,
         )
 
+    @action(detail=False, methods=["get"], url_path="resumen")
+    def resumen(self, request):
+        """
+        Resumen de un período cualquiera (solo Administrador).
+        ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD (por defecto, hoy).
+        """
+        from datetime import date
+
+        hoy = timezone.localdate()
+        try:
+            desde = date.fromisoformat(request.query_params.get("desde") or str(hoy))
+            hasta = date.fromisoformat(request.query_params.get("hasta") or str(desde))
+        except ValueError:
+            return Response(
+                {"detail": "Formato de fecha inválido. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if desde > hasta:
+            return Response(
+                {"detail": "La fecha 'desde' no puede ser posterior a 'hasta'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(_resumen_gastos(desde, hasta))
+
     @action(detail=False, methods=["get"], url_path="resumen-semanal")
     def resumen_semanal(self, request):
-        """Ventas, costos, gastos y resultado de la semana (lunes a domingo)."""
+        """Atajo: semana de lunes a domingo que contiene ?fecha=."""
         try:
             fecha = _parse_fecha_query(request)
         except serializers.ValidationError as exc:
             return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
-
         desde, hasta = _semana_de(fecha)
-        gastos = Gasto.objects.filter(
-            fecha__gte=desde,
-            fecha__lte=hasta,
-            estado=Gasto.Estado.ACTIVO,
-        )
+        return Response(_resumen_gastos(desde, hasta))
 
-        total_costos = (
-            gastos.filter(tipo=Gasto.Tipo.COSTO).aggregate(t=Sum("monto"))["t"]
-            or Decimal("0.00")
-        )
-        total_gastos = (
-            gastos.filter(tipo=Gasto.Tipo.GASTO).aggregate(t=Sum("monto"))["t"]
-            or Decimal("0.00")
-        )
-        total_ventas = (
-            Venta.objects.filter(
-                fecha_hora__date__gte=desde,
-                fecha_hora__date__lte=hasta,
-                estado=Venta.Estado.COMPLETADA,
-            ).aggregate(t=Sum("total"))["t"]
-            or Decimal("0.00")
-        )
 
-        nombres_categoria = dict(Gasto.Categoria.choices)
-        por_categoria = [
-            {
-                "categoria": row["categoria"],
-                "nombre": nombres_categoria.get(row["categoria"], row["categoria"]),
-                "tipo": row["tipo"],
-                "monto": row["monto"],
-                "cantidad": row["cantidad"],
-            }
-            for row in gastos.values("categoria", "tipo")
-            .annotate(monto=Sum("monto"), cantidad=Count("id"))
-            .order_by("-monto")
-        ]
+def _resumen_gastos(desde, hasta):
+    """Ventas, costos, gastos y resultado entre dos fechas (inclusive)."""
+    gastos = Gasto.objects.filter(
+        fecha__gte=desde,
+        fecha__lte=hasta,
+        estado=Gasto.Estado.ACTIVO,
+    )
+    total_costos = (
+        gastos.filter(tipo=Gasto.Tipo.COSTO).aggregate(t=Sum("monto"))["t"]
+        or Decimal("0.00")
+    )
+    total_gastos = (
+        gastos.filter(tipo=Gasto.Tipo.GASTO).aggregate(t=Sum("monto"))["t"]
+        or Decimal("0.00")
+    )
+    total_ventas = (
+        Venta.objects.filter(
+            fecha_hora__date__gte=desde,
+            fecha_hora__date__lte=hasta,
+            estado=Venta.Estado.COMPLETADA,
+        ).aggregate(t=Sum("total"))["t"]
+        or Decimal("0.00")
+    )
 
-        return Response(
-            {
-                "desde": desde,
-                "hasta": hasta,
-                "total_ventas": total_ventas,
-                "total_costos": total_costos,
-                "total_gastos": total_gastos,
-                "resultado": total_ventas - total_costos - total_gastos,
-                "por_categoria": por_categoria,
-            }
-        )
+    nombres_categoria = dict(Gasto.Categoria.choices)
+    por_categoria = [
+        {
+            "categoria": row["categoria"],
+            "nombre": nombres_categoria.get(row["categoria"], row["categoria"]),
+            "tipo": row["tipo"],
+            "monto": row["monto"],
+            "cantidad": row["cantidad"],
+        }
+        for row in gastos.values("categoria", "tipo")
+        .annotate(monto=Sum("monto"), cantidad=Count("id"))
+        .order_by("-monto")
+    ]
+
+    return {
+        "desde": desde,
+        "hasta": hasta,
+        "total_ventas": total_ventas,
+        "total_costos": total_costos,
+        "total_gastos": total_gastos,
+        "resultado": total_ventas - total_costos - total_gastos,
+        "por_categoria": por_categoria,
+    }
 
 
 def _parse_fecha_query(request):

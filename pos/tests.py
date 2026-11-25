@@ -1356,3 +1356,49 @@ class GastoTests(BaseAPITest):
         self.assertEqual(Decimal(r.data["resultado"]), Decimal("22000.00"))
         self.assertEqual(len(r.data["por_categoria"]), 2)
 
+    def test_resumen_por_rango_y_mes(self):
+        hoy = timezone.localdate()
+        self.auth(self.admin)
+        self.client.post("/api/gastos/", self.payload(monto="1000"), format="json")
+        self.client.post(
+            "/api/gastos/",
+            self.payload(tipo="gasto", categoria="sueldos", monto="2000",
+                         fecha=str(hoy - timedelta(days=3))),
+            format="json",
+        )
+        # Solo hoy
+        r = self.client.get(f"/api/gastos/resumen/?desde={hoy}&hasta={hoy}")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(r.data["total_costos"]), Decimal("1000.00"))
+        self.assertEqual(Decimal(r.data["total_gastos"]), Decimal("0.00"))
+        # Rango de 5 días
+        r = self.client.get(
+            f"/api/gastos/resumen/?desde={hoy - timedelta(days=4)}&hasta={hoy}"
+        )
+        self.assertEqual(Decimal(r.data["total_gastos"]), Decimal("2000.00"))
+        # Rango invertido
+        r = self.client.get(
+            f"/api/gastos/resumen/?desde={hoy}&hasta={hoy - timedelta(days=1)}"
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+        # Cajero no ve el resumen
+        self.auth(self.cajero)
+        r = self.client.get("/api/gastos/resumen/")
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_filtros_de_listado(self):
+        self.auth(self.admin)
+        self.client.post("/api/gastos/", self.payload(), format="json")
+        self.client.post(
+            "/api/gastos/",
+            self.payload(tipo="gasto", categoria="arriendo", medio_pago="transferencia"),
+            format="json",
+        )
+        self.assertEqual(self.client.get("/api/gastos/?tipo=gasto").data["count"], 1)
+        self.assertEqual(
+            self.client.get("/api/gastos/?categoria=insumos").data["count"], 1
+        )
+        self.assertEqual(
+            self.client.get("/api/gastos/?medio_pago=transferencia").data["count"], 1
+        )
+

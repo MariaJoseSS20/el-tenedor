@@ -132,7 +132,7 @@ class PermisoGastos(BasePermission):
             return False
         if getattr(user, "es_administrador", False):
             return True
-        if getattr(view, "action", None) == "resumen_semanal":
+        if getattr(view, "action", None) in ("resumen", "resumen_semanal"):
             return False
         return request.method in SAFE_METHODS or request.method == "POST"
 
