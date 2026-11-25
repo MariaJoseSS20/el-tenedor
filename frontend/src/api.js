@@ -215,6 +215,21 @@ export const api = {
       body: JSON.stringify({ fecha }),
     }),
   cajas: () => request("/api/caja-diaria/").then(asList),
+  egresos: (fecha) => {
+    const q = fecha ? `?fecha=${fecha}` : "";
+    return request(`/api/egresos/${q}`).then(asList);
+  },
+  crearEgreso: (body) =>
+    request("/api/egresos/", { method: "POST", body: JSON.stringify(body) }),
+  anularEgreso: (id) =>
+    request(`/api/egresos/${id}/`, {
+      method: "PATCH",
+      body: JSON.stringify({ estado: "anulado" }),
+    }),
+  efectivoDisponible: (fecha) => {
+    const q = fecha ? `?fecha=${fecha}` : "";
+    return request(`/api/egresos/efectivo-disponible/${q}`);
+  },
   reporteDiario: (fecha) => {
     const q = fecha ? `?fecha=${fecha}` : "";
     return request(`/api/reportes/diario/${q}`);

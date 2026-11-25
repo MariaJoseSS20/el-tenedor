@@ -653,6 +653,12 @@ class CajaDiaria(models.Model):
         decimal_places=2,
         default=Decimal("0.00"),
     )
+    total_egresos = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Salidas de efectivo registradas en el día (egresos activos).",
+    )
 
     usuario_cierre = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -675,6 +681,11 @@ class CajaDiaria(models.Model):
         )
 
     @property
+    def efectivo_en_caja(self):
+        """Efectivo de ventas menos las salidas de efectivo del día."""
+        return self.total_efectivo - self.total_egresos
+
+    @property
     def total_general(self):
         return (
             self.total_efectivo
@@ -684,6 +695,46 @@ class CajaDiaria(models.Model):
             + self.total_transferencias
             + self.total_webpay
         )
+
+
+class Egreso(models.Model):
+    """
+    Salida de efectivo de la caja (pago a proveedor, compra de insumos, etc.).
+
+    - Lo registran cajeros y administradores.
+    - Se descuenta del efectivo en caja del día.
+    - No se borra: el administrador puede anularlo para conservar auditoría.
+    """
+
+    class Estado(models.TextChoices):
+        ACTIVO = "activo", "Activo"
+        ANULADO = "anulado", "Anulado"
+
+    fecha_hora = models.DateTimeField(default=timezone.now)
+    monto = models.DecimalField(max_digits=12, decimal_places=2)
+    descripcion = models.CharField(
+        max_length=255,
+        help_text="Motivo de la salida de efectivo. Ej. compra de hielo.",
+    )
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="egresos",
+    )
+    estado = models.CharField(
+        max_length=10,
+        choices=Estado.choices,
+        default=Estado.ACTIVO,
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-fecha_hora"]
+        verbose_name = "egreso"
+        verbose_name_plural = "egresos"
+
+    def __str__(self):
+        return f"Egreso #{self.pk} — {self.monto} ({self.get_estado_display()})"
 
 
 class Pedido(models.Model):

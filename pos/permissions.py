@@ -89,3 +89,28 @@ class PermisoVentas(BasePermission):
 
         # Anular: solo admin
         return getattr(user, "es_administrador", False)
+
+
+class PermisoEgresos(BasePermission):
+    """
+    - Listar / ver / registrar egresos: cajero y administrador.
+    - Anular (PUT/PATCH): solo administrador.
+    """
+
+    message = "Solo el Administrador puede anular egresos."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if request.method in SAFE_METHODS or request.method == "POST":
+            return True
+        return getattr(user, "es_administrador", False)
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if getattr(user, "es_administrador", False):
+            return True
+        if request.method in SAFE_METHODS:
+            return obj.usuario_id == user.id
+        return False

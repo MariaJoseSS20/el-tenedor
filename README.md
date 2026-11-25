@@ -75,6 +75,9 @@ Prefijo oficial: **`/api/v1/`**. Las mismas rutas responden también en `/api/` 
 | PUT/PATCH | `/api/v1/ventas/{id}/` | Anular con `{"estado":"anulada"}`. Solo admin |
 | DELETE | `/api/v1/ventas/{id}/` | Responde 405. La venta no se borra |
 | POST | `/api/v1/sync-ventas/` | Cajero y admin. Lote offline |
+| GET/POST | `/api/v1/egresos/` | Cajero y admin. Salidas de efectivo; se descuentan de la caja. Cajero ve los propios. Filtro `?fecha=` |
+| PATCH | `/api/v1/egresos/{id}/` | Anular con `{"estado":"anulado"}`. Solo admin |
+| GET | `/api/v1/egresos/efectivo-disponible/?fecha=YYYY-MM-DD` | Cajero y admin. Efectivo de ventas − egresos |
 | GET/POST | `/api/v1/caja-diaria/` | Solo admin. Listado paginado |
 | GET | `/api/v1/caja-diaria/preview/` | Solo admin |
 | GET | `/api/v1/reportes/diario/?fecha=YYYY-MM-DD` | Solo admin |

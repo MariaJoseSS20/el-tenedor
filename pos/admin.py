@@ -9,6 +9,7 @@ from .models import (
     CustomUser,
     DetallePedido,
     DetalleVenta,
+    Egreso,
     HorarioPedidosWeb,
     Inventario,
     Pedido,
@@ -223,10 +224,12 @@ class CajaDiariaAdmin(admin.ModelAdmin):
         "credito_pesos",
         "transferencias_pesos",
         "webpay_pesos",
+        "egresos_pesos",
         "usuario_cierre",
         "cerrado_en",
     )
     exclude = (
+        "total_egresos",
         "total_efectivo",
         "total_tarjetas",
         "total_debito",
@@ -241,6 +244,7 @@ class CajaDiariaAdmin(admin.ModelAdmin):
         "credito_pesos",
         "transferencias_pesos",
         "webpay_pesos",
+        "egresos_pesos",
         "cerrado_en",
     )
 
@@ -267,3 +271,19 @@ class CajaDiariaAdmin(admin.ModelAdmin):
     @admin.display(description="Webpay", ordering="total_webpay")
     def webpay_pesos(self, obj):
         return pesos(obj.total_webpay)
+
+    @admin.display(description="Egresos", ordering="total_egresos")
+    def egresos_pesos(self, obj):
+        return pesos(obj.total_egresos)
+
+
+@admin.register(Egreso)
+class EgresoAdmin(admin.ModelAdmin):
+    list_display = ("id", "fecha_hora", "monto_pesos", "descripcion", "usuario", "estado")
+    list_filter = ("estado", "fecha_hora")
+    search_fields = ("descripcion", "usuario__username")
+    readonly_fields = ("creado_en",)
+
+    @admin.display(description="Monto", ordering="monto")
+    def monto_pesos(self, obj):
+        return pesos(obj.monto)

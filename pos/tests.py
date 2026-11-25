@@ -15,7 +15,15 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from pos.horario_pedidos import MENSAJE_CERRADO, estado_pedidos_web
-from pos.models import CajaDiaria, CustomUser, Inventario, Producto, Venta, ZonaDelivery
+from pos.models import (
+    CajaDiaria,
+    CustomUser,
+    Egreso,
+    Inventario,
+    Producto,
+    Venta,
+    ZonaDelivery,
+)
 
 
 class BaseAPITest(TestCase):
@@ -1020,4 +1028,171 @@ class RegistroYPaginacionTests(BaseAPITest):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.admin.refresh_from_db()
         self.assertTrue(self.admin.password.startswith("pbkdf2_sha256$100000$"))
+
+
+class EgresoTests(BaseAPITest):
+    """Salidas de efectivo: cajero y admin registran; se descuentan de la caja."""
+
+    def venta_efectivo(self, cantidad=2):
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/ventas/",
+            {
+                "metodo_pago": "efectivo",
+                "tipo_entrega": "retiro",
+                "cobro_delivery": "0",
+                "detalles": [{"producto": self.producto.id, "cantidad": cantidad}],
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+
+    def test_cajero_registra_egreso_y_descuenta_efectivo(self):
+        self.venta_efectivo()  # 10.000 en efectivo
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/v1/egresos/",
+            {"monto": "3000", "descripcion": "Compra de hielo"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r.data["usuario"], self.cajero.username)
+        self.assertEqual(r.data["estado"], "activo")
+
+        r = self.client.get("/api/v1/egresos/efectivo-disponible/")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(r.data["total_efectivo"]), Decimal("10000.00"))
+        self.assertEqual(Decimal(r.data["total_egresos"]), Decimal("3000.00"))
+        self.assertEqual(Decimal(r.data["efectivo_en_caja"]), Decimal("7000.00"))
+
+    def test_admin_registra_egreso(self):
+        self.venta_efectivo()
+        self.auth(self.admin)
+        r = self.client.post(
+            "/api/egresos/",
+            {"monto": "1500", "descripcion": "Pago gas"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+
+    def test_egreso_requiere_login(self):
+        r = self.client.post(
+            "/api/egresos/",
+            {"monto": "1000", "descripcion": "X"},
+            format="json",
+        )
+        self.assertIn(
+            r.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
+
+    def test_egreso_monto_invalido_o_sin_motivo(self):
+        self.venta_efectivo()
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/egresos/", {"monto": "0", "descripcion": "X"}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+        r = self.client.post(
+            "/api/egresos/", {"monto": "100", "descripcion": "  "}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_egreso_no_supera_efectivo_en_caja(self):
+        self.venta_efectivo(cantidad=1)  # 5.000
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/egresos/",
+            {"monto": "6000", "descripcion": "Proveedor"},
+            format="json",
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Egreso.objects.count(), 0)
+
+    def test_egreso_rechazado_si_caja_cerrada(self):
+        self.venta_efectivo()
+        self.auth(self.admin)
+        self.client.post(
+            "/api/caja-diaria/", {"fecha": str(timezone.localdate())}, format="json"
+        )
+        self.auth(self.cajero)
+        r = self.client.post(
+            "/api/egresos/", {"monto": "100", "descripcion": "X"}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cierre_y_preview_incluyen_egresos(self):
+        self.venta_efectivo()
+        self.auth(self.cajero)
+        self.client.post(
+            "/api/egresos/", {"monto": "2500", "descripcion": "Bolsas"}, format="json"
+        )
+        self.auth(self.admin)
+        preview = self.client.get("/api/caja-diaria/preview/").data
+        self.assertEqual(Decimal(preview["total_egresos"]), Decimal("2500.00"))
+        self.assertEqual(Decimal(preview["efectivo_en_caja"]), Decimal("7500.00"))
+        self.assertEqual(len(preview["egresos"]), 1)
+
+        r = self.client.post(
+            "/api/caja-diaria/", {"fecha": str(timezone.localdate())}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(r.data["total_egresos"]), Decimal("2500.00"))
+        self.assertEqual(Decimal(r.data["efectivo_en_caja"]), Decimal("7500.00"))
+
+        reporte = self.client.get("/api/reportes/diario/").data
+        self.assertEqual(Decimal(reporte["efectivo_en_caja"]), Decimal("7500.00"))
+
+    def test_cajero_ve_solo_sus_egresos_y_no_anula(self):
+        self.venta_efectivo()
+        self.auth(self.admin)
+        propio_admin = self.client.post(
+            "/api/egresos/", {"monto": "1000", "descripcion": "Admin"}, format="json"
+        ).data
+        self.auth(self.cajero)
+        propio = self.client.post(
+            "/api/egresos/", {"monto": "1000", "descripcion": "Cajero"}, format="json"
+        ).data
+
+        r = self.client.get("/api/egresos/")
+        ids = [e["id"] for e in r.data["results"]]
+        self.assertEqual(ids, [propio["id"]])
+
+        r = self.client.get(f"/api/egresos/{propio_admin['id']}/")
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+        r = self.client.patch(
+            f"/api/egresos/{propio['id']}/", {"estado": "anulado"}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_anula_egreso_y_recalcula_caja_cerrada(self):
+        self.venta_efectivo()
+        self.auth(self.cajero)
+        egreso = self.client.post(
+            "/api/egresos/", {"monto": "4000", "descripcion": "Proveedor"}, format="json"
+        ).data
+        self.auth(self.admin)
+        fecha = str(timezone.localdate())
+        self.client.post("/api/caja-diaria/", {"fecha": fecha}, format="json")
+        caja = CajaDiaria.objects.get(fecha=fecha)
+        self.assertEqual(caja.total_egresos, Decimal("4000.00"))
+
+        r = self.client.patch(
+            f"/api/egresos/{egreso['id']}/", {"estado": "anulado"}, format="json"
+        )
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data["estado"], "anulado")
+        caja.refresh_from_db()
+        self.assertEqual(caja.total_egresos, Decimal("0.00"))
+        self.assertEqual(caja.efectivo_en_caja, Decimal("10000.00"))
+
+    def test_egreso_no_se_borra(self):
+        self.venta_efectivo()
+        self.auth(self.admin)
+        egreso = self.client.post(
+            "/api/egresos/", {"monto": "100", "descripcion": "X"}, format="json"
+        ).data
+        r = self.client.delete(f"/api/egresos/{egreso['id']}/")
+        self.assertEqual(r.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
 

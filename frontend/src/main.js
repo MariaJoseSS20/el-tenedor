@@ -130,6 +130,9 @@ tipo_entrega: "retiro",
   inventario: [],
   cajaPreview: null,
   cajaCerrada: null,
+  /** Salidas de efectivo del día y efectivo disponible en caja. */
+  egresos: [],
+  efectivoCaja: null,
   reporteFecha: fechaLocalHoy(),
   reporte: null,
   /** Confirmación salsa extra: { salsa } */
@@ -521,6 +524,7 @@ function shell(content) {
           }
         </button>
         <button data-view="ventas" class="${state.view === "ventas" ? "active" : ""}">Historial</button>
+        <button data-view="egresos" class="${state.view === "egresos" ? "active" : ""}">Egresos</button>
         ${
           isAdmin
             ? `
@@ -2611,6 +2615,127 @@ function renderDelivery() {
   `;
 }
 
+async function loadEgresos() {
+  const fecha = fechaLocalHoy();
+  const [egresos, efectivo] = await Promise.all([
+    api.egresos(fecha),
+    api.efectivoDisponible(fecha),
+  ]);
+  state.egresos = egresos;
+  state.efectivoCaja = efectivo;
+}
+
+function renderEgresos() {
+  const isAdmin = state.user?.rol === "administrador";
+  const e = state.efectivoCaja;
+  const cerrada = Boolean(e?.cerrada);
+
+  const rows = state.egresos
+    .map((eg) => {
+      const anulado = eg.estado === "anulado";
+      const hora = eg.fecha_hora
+        ? new Date(eg.fecha_hora).toLocaleTimeString("es-CL", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—";
+      return `
+        <tr style="${anulado ? "opacity:.55" : ""}">
+          <td>${escapeHtml(hora)}</td>
+          <td>${escapeHtml(eg.descripcion)}</td>
+          <td>${escapeHtml(eg.usuario || "—")}</td>
+          <td>${anulado ? "Anulado" : "Activo"}</td>
+          <td style="text-align:right">
+            <strong style="${anulado ? "text-decoration:line-through" : ""}">${money(eg.monto)}</strong>
+          </td>
+          ${
+            isAdmin
+              ? `<td>${
+                  anulado
+                    ? "—"
+                    : `<button class="btn btn-danger" data-anular-egreso="${eg.id}" type="button" style="width:auto">Anular</button>`
+                }</td>`
+              : ""
+          }
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <section class="panel">
+      <h2>Egresos de caja</h2>
+      <p class="sub">
+        Registra las salidas de efectivo (pagos a proveedores, compras, etc.).
+        Se descuentan del efectivo que queda en caja.
+      </p>
+
+      ${
+        e
+          ? `
+            <div class="stats">
+              <div class="stat">
+                <div class="label">Efectivo de ventas</div>
+                <div class="value">${money(e.total_efectivo)}</div>
+              </div>
+              <div class="stat">
+                <div class="label">Egresos</div>
+                <div class="value">− ${money(e.total_egresos)}</div>
+              </div>
+              <div class="stat">
+                <div class="label">Efectivo en caja</div>
+                <div class="value">${money(e.efectivo_en_caja)}</div>
+              </div>
+            </div>
+          `
+          : `<p class="muted">Cargando…</p>`
+      }
+
+      ${
+        cerrada
+          ? `<p class="muted" style="margin-top:16px">La caja de hoy ya está cerrada. No se pueden registrar más egresos.</p>`
+          : `
+            <form id="form-egreso" class="row-actions" style="align-items:end;margin-top:16px">
+              <div class="field" style="margin:0;min-width:150px">
+                <label for="egreso-monto">Monto</label>
+                <input id="egreso-monto" type="number" min="1" step="1" placeholder="Ej. 5000" required />
+              </div>
+              <div class="field" style="margin:0;flex:1;min-width:220px">
+                <label for="egreso-descripcion">Motivo</label>
+                <input id="egreso-descripcion" type="text" maxlength="255" placeholder="Ej. compra de hielo, pago proveedor…" required />
+              </div>
+              <button class="btn btn-primary" type="submit" style="width:auto">Registrar egreso</button>
+            </form>
+          `
+      }
+
+      <h3 class="section-title" style="margin-top:28px">
+        ${isAdmin ? "Egresos de hoy" : "Mis egresos de hoy"}
+      </h3>
+      <div style="overflow:auto">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Hora</th>
+              <th>Motivo</th>
+              <th>Usuario</th>
+              <th>Estado</th>
+              <th style="text-align:right">Monto</th>
+              ${isAdmin ? "<th>Acciones</th>" : ""}
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              rows ||
+              `<tr><td colspan="${isAdmin ? 6 : 5}" class="muted">No hay egresos registrados hoy.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderCaja() {
   const p = state.cajaPreview;
   const cierre = state.cajaCerrada;
@@ -2706,6 +2831,16 @@ function renderCaja() {
               </div>
 
               <div class="stat">
+                <div class="label">Egresos</div>
+                <div class="value">− ${money(p.total_egresos || 0)}</div>
+              </div>
+
+              <div class="stat">
+                <div class="label">Efectivo en caja</div>
+                <div class="value">${money(p.efectivo_en_caja ?? p.total_efectivo)}</div>
+              </div>
+
+              <div class="stat">
                 <div class="label">Débito</div>
                 <div class="value">${money(p.total_debito)}</div>
               </div>
@@ -2772,6 +2907,25 @@ function renderCaja() {
                 </table>
               </div>
 
+              <h3 class="section-title" style="margin-top:24px">Egresos de efectivo</h3>
+
+              <div style="overflow:auto">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Hora</th>
+                      <th>Motivo</th>
+                      <th>Usuario</th>
+                      <th style="text-align:right">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${filasEgresosCaja(cierre.egresos) ||
+                      `<tr><td colspan="4" class="muted">No hubo egresos durante el día.</td></tr>`}
+                  </tbody>
+                </table>
+              </div>
+
               <div class="row-actions">
                 <button
                   class="btn btn-primary"
@@ -2807,6 +2961,27 @@ function renderCaja() {
       }
     </section>
   `;
+}
+
+function filasEgresosCaja(egresos) {
+  return (egresos || [])
+    .map((eg) => {
+      const hora = eg.fecha_hora
+        ? new Date(eg.fecha_hora).toLocaleTimeString("es-CL", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—";
+      return `
+        <tr>
+          <td>${escapeHtml(hora)}</td>
+          <td>${escapeHtml(eg.descripcion)}</td>
+          <td>${escapeHtml(eg.usuario || "—")}</td>
+          <td class="numero" style="text-align:right">${money(eg.monto)}</td>
+        </tr>
+      `;
+    })
+    .join("");
 }
 
 function cerrarProductoModal() {
@@ -2991,6 +3166,7 @@ function render() {
   if (state.view === "delivery") content = renderDelivery();
   if (state.view === "horario") content = renderHorario();
   if (state.view === "caja") content = renderCaja();
+  if (state.view === "egresos") content = renderEgresos();
   if (state.view === "reportes") content = renderReportes();
 
   app.innerHTML = shell(content);
@@ -3041,6 +3217,7 @@ function bindShell() {
         if (state.view === "reportes") {
           state.reporte = await api.reporteDiario(state.reporteFecha);
         }
+        if (state.view === "egresos") await loadEgresos();
       } catch (e) {
         toast(e.message, true);
       }
@@ -4317,6 +4494,49 @@ document.getElementById("metodo_pago")?.addEventListener("change", (e) => {
     }
   });
 
+  document.getElementById("form-egreso")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const monto = Number(document.getElementById("egreso-monto").value);
+    const descripcion = document.getElementById("egreso-descripcion").value.trim();
+
+    if (!Number.isFinite(monto) || monto <= 0) {
+      toast("Ingresa un monto mayor a 0", true);
+      return;
+    }
+    if (!descripcion) {
+      toast("Indica el motivo del egreso", true);
+      return;
+    }
+    const disponible = Number(state.efectivoCaja?.efectivo_en_caja ?? 0);
+    if (monto > disponible) {
+      toast(`No hay suficiente efectivo en caja (disponible ${money(disponible)})`, true);
+      return;
+    }
+
+    try {
+      await api.crearEgreso({ monto, descripcion });
+      await loadEgresos();
+      toast(`Egreso registrado: ${money(monto)}`);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  document.querySelectorAll("[data-anular-egreso]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("¿Anular este egreso? El monto vuelve a sumarse al efectivo en caja.")) return;
+      try {
+        await api.anularEgreso(btn.dataset.anularEgreso);
+        await loadEgresos();
+        toast("Egreso anulado");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
   document.getElementById("btn-imprimir-cierre")?.addEventListener("click", () => {
     if (!state.cajaCerrada) return;
 
@@ -4775,6 +4995,8 @@ function imprimirCierreCaja(cierre) {
 
         <div class="resumen">
           <div>Efectivo: <strong>${money(cierre.total_efectivo)}</strong></div>
+          <div>Egresos: <strong>− ${money(cierre.total_egresos || 0)}</strong></div>
+          <div>Efectivo en caja: <strong>${money(cierre.efectivo_en_caja ?? cierre.total_efectivo)}</strong></div>
           <div>Débito: <strong>${money(cierre.total_debito)}</strong></div>
           <div>Crédito: <strong>${money(cierre.total_credito)}</strong></div>
           <div>Transferencias: <strong>${money(cierre.total_transferencias)}</strong></div>
@@ -4809,6 +5031,23 @@ function imprimirCierreCaja(cierre) {
                 </tr>
               `
             }
+          </tbody>
+        </table>
+
+        <h2>Egresos de efectivo</h2>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Hora</th>
+              <th>Motivo</th>
+              <th>Usuario</th>
+              <th style="text-align:right">Monto</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filasEgresosCaja(cierre.egresos) ||
+              `<tr><td colspan="4">No hubo egresos durante el día.</td></tr>`}
           </tbody>
         </table>
       </body>
@@ -5135,4 +5374,4 @@ bootstrap();
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
-}
+}

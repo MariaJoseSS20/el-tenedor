@@ -8,6 +8,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CajaDiariaViewSet,
     CartaView,
+    EgresoViewSet,
     HorarioPedidosConfigView,
     HorarioPedidosView,
     InventarioViewSet,
@@ -26,6 +27,7 @@ router = DefaultRouter()
 router.register(r"productos", ProductoViewSet, basename="producto")
 router.register(r"inventario", InventarioViewSet, basename="inventario")
 router.register(r"ventas", VentaViewSet, basename="venta")
+router.register(r"egresos", EgresoViewSet, basename="egreso")
 router.register(r"caja-diaria", CajaDiariaViewSet, basename="caja-diaria")
 router.register(r"pedidos", PedidoViewSet, basename="pedido")
 router.register(r"zonas-delivery", ZonaDeliveryViewSet, basename="zona-delivery")

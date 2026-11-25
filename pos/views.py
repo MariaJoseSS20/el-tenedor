@@ -40,6 +40,7 @@ from rest_framework.views import APIView
 from .models import (
     CajaDiaria,
     DetalleVenta,
+    Egreso,
     HorarioPedidosWeb,
     Inventario,
     Pedido,
@@ -55,6 +56,8 @@ from .permissions import (
 
     LecturaTodosEscrituraAdmin,
 
+    PermisoEgresos,
+
     PermisoVentas,
 
 )
@@ -68,6 +71,7 @@ from .serializers import (
     CartaProductoSerializer,
 
     CustomUserSerializer,
+    EgresoSerializer,
     HorarioPedidosWebSerializer,
     InventarioSerializer,
 
@@ -254,9 +258,31 @@ def _totales_caja_para_fecha(fecha):
 
 
 
+    egresos = Egreso.objects.filter(
+        fecha_hora__date=fecha,
+        estado=Egreso.Estado.ACTIVO,
+    ).select_related("usuario")
+    total_egresos = egresos.aggregate(t=Sum("monto"))["t"] or Decimal("0.00")
+    detalle_egresos = [
+        {
+            "egreso_id": e.id,
+            "fecha_hora": e.fecha_hora,
+            "usuario": e.usuario.username,
+            "descripcion": e.descripcion,
+            "monto": e.monto,
+        }
+        for e in egresos
+    ]
+
     return {
 
         **totales,
+
+        "total_egresos": total_egresos,
+
+        "efectivo_en_caja": totales["total_efectivo"] - total_egresos,
+
+        "egresos": detalle_egresos,
 
         "cantidad_ventas": ventas.count(),
 
@@ -300,9 +326,13 @@ def recalcular_caja_si_existe(fecha_hora):
 
     caja.total_webpay = totales["total_webpay"]
 
+    caja.total_egresos = totales["total_egresos"]
+
     caja.save(
 
         update_fields=[
+
+            "total_egresos",
 
             "total_efectivo",
 
@@ -973,6 +1003,8 @@ class CajaDiariaViewSet(
 
                 total_webpay=totales["total_webpay"],
 
+                total_egresos=totales["total_egresos"],
+
                 usuario_cierre=request.user,
 
             )
@@ -1028,6 +1060,9 @@ class CajaDiariaViewSet(
             "total_credito": totales["total_credito"],
             "total_transferencias": totales["total_transferencias"],
             "total_webpay": totales["total_webpay"],
+            "total_egresos": totales["total_egresos"],
+            "efectivo_en_caja": totales["efectivo_en_caja"],
+            "egresos": totales["egresos"],
             "cantidad_ventas": totales["cantidad_ventas"],
             "movimientos": totales["movimientos"],
             "cerrada": caja_cerrada is not None,
@@ -1051,6 +1086,123 @@ class CajaDiariaViewSet(
         )
 
         return Response(data)
+
+
+class EgresoViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.ListModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Salidas de efectivo de la caja.
+
+    - POST: cajero y administrador. Se registra con la hora actual y se
+      descuenta del efectivo en caja del día.
+    - GET: cajero ve los propios; administrador ve todos. Filtro ?fecha=YYYY-MM-DD.
+    - PATCH {"estado": "anulado"}: solo administrador. No se borran.
+    - GET efectivo-disponible/: efectivo de ventas, egresos y efectivo en caja.
+    """
+
+    serializer_class = EgresoSerializer
+    permission_classes = [PermisoEgresos]
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
+    queryset = Egreso.objects.select_related("usuario")
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if not getattr(user, "es_administrador", False):
+            qs = qs.filter(usuario=user)
+        fecha_str = self.request.query_params.get("fecha")
+        if fecha_str and self.action == "list":
+            from datetime import date
+
+            try:
+                qs = qs.filter(fecha_hora__date=date.fromisoformat(fecha_str))
+            except ValueError as exc:
+                raise serializers.ValidationError(
+                    {"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}
+                ) from exc
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        ahora = timezone.now()
+        if dia_ya_cerrado(ahora):
+            return Response(
+                {"detail": "La caja de hoy ya está cerrada. No se pueden registrar egresos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        monto = serializer.validated_data["monto"]
+        with transaction.atomic():
+            disponible = _totales_caja_para_fecha(timezone.localtime(ahora).date())[
+                "efectivo_en_caja"
+            ]
+            if monto > disponible:
+                return Response(
+                    {
+                        "detail": (
+                            "No hay suficiente efectivo en caja. "
+                            f"Disponible: ${disponible:,.0f}".replace(",", ".")
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            egreso = serializer.save(usuario=request.user, fecha_hora=ahora)
+
+        return Response(
+            self.get_serializer(egreso).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        """Anulación (solo Administrador). Body: {"estado": "anulado"}."""
+        egreso = self.get_object()
+        if request.data.get("estado") != Egreso.Estado.ANULADO:
+            return Response(
+                {"detail": "Solo se permite cambiar el estado a 'anulado'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if egreso.estado == Egreso.Estado.ANULADO:
+            return Response(
+                {"detail": "El egreso ya está anulado."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        egreso.estado = Egreso.Estado.ANULADO
+        egreso.save(update_fields=["estado"])
+        recalcular_caja_si_existe(egreso.fecha_hora)
+        return Response(self.get_serializer(egreso).data)
+
+    def update(self, request, *args, **kwargs):
+        if kwargs.get("partial"):
+            return self.partial_update(request, *args, **kwargs)
+        return Response(
+            {"detail": "Use PATCH con {\"estado\": \"anulado\"} para anular."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    @action(detail=False, methods=["get"], url_path="efectivo-disponible")
+    def efectivo_disponible(self, request):
+        """Efectivo de ventas del día menos egresos activos."""
+        try:
+            fecha = _parse_fecha_query(request)
+        except serializers.ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+        totales = _totales_caja_para_fecha(fecha)
+        return Response(
+            {
+                "fecha": fecha,
+                "total_efectivo": totales["total_efectivo"],
+                "total_egresos": totales["total_egresos"],
+                "efectivo_en_caja": totales["efectivo_en_caja"],
+                "cerrada": CajaDiaria.objects.filter(fecha=fecha).exists(),
+            }
+        )
 
 
 def _parse_fecha_query(request):
@@ -1194,6 +1346,10 @@ class ReporteDiarioView(APIView):
                 "total_webpay": str(total_webpay),
 
                 "total_general": str(total_general),
+
+                "total_egresos": str(totales_pago["total_egresos"]),
+
+                "efectivo_en_caja": str(totales_pago["efectivo_en_caja"]),
 
                 "por_entrega": por_entrega,
 

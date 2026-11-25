@@ -13,6 +13,7 @@ from .models import (
     CustomUser,
     DetallePedido,
     DetalleVenta,
+    Egreso,
     Inventario,
     PagoVenta,
     Pedido,
@@ -367,6 +368,11 @@ class SyncVentasSerializer(serializers.Serializer):
         return value
 class CajaDiariaSerializer(serializers.ModelSerializer):
     usuario_cierre = CustomUserSerializer(read_only=True)
+    efectivo_en_caja = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
     total_general = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -383,11 +389,15 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
             "total_credito",
             "total_transferencias",
             "total_webpay",
+            "total_egresos",
+            "efectivo_en_caja",
             "total_general",
             "usuario_cierre",
             "cerrado_en",
         )
         read_only_fields = (
+            "total_egresos",
+            "efectivo_en_caja",
             "total_efectivo",
             "total_tarjetas",
             "total_debito",
@@ -398,6 +408,36 @@ class CajaDiariaSerializer(serializers.ModelSerializer):
             "usuario_cierre",
             "cerrado_en",
         )
+class EgresoSerializer(serializers.ModelSerializer):
+    """Salida de efectivo. El usuario y la fecha los pone el servidor."""
+
+    usuario = serializers.CharField(source="usuario.username", read_only=True)
+
+    class Meta:
+        model = Egreso
+        fields = (
+            "id",
+            "fecha_hora",
+            "monto",
+            "descripcion",
+            "usuario",
+            "estado",
+            "creado_en",
+        )
+        read_only_fields = ("fecha_hora", "usuario", "estado", "creado_en")
+
+    def validate_monto(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("El monto debe ser mayor a 0.")
+        return value
+
+    def validate_descripcion(self, value):
+        texto = (value or "").strip()
+        if not texto:
+            raise serializers.ValidationError("Indica el motivo del egreso.")
+        return texto
+
+
 class CajaDiariaCierreSerializer(serializers.Serializer):
     """Entrada para calcular y persistir el cierre de una fecha."""
     fecha = serializers.DateField(required=True)
